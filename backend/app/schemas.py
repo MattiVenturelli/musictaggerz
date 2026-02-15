@@ -79,6 +79,7 @@ class TagRequest(BaseModel):
 
 class ScanRequest(BaseModel):
     path: Optional[str] = None
+    force: bool = False
 
 
 class StatsResponse(BaseModel):

@@ -10,9 +10,15 @@ from app.config import settings
 from app.utils.logger import log
 
 
-def scan_directory(path: str = None) -> List[int]:
+def scan_directory(path: str = None, force: bool = False) -> List[int]:
+    """Scan a directory for albums.
+
+    Args:
+        path: Directory to scan (defaults to MUSIC_DIR)
+        force: If True, re-scan albums already in the database (reset to pending)
+    """
     scan_path = path or settings.music_dir
-    log.info(f"Scanning directory: {scan_path}")
+    log.info(f"Scanning directory: {scan_path} (force={force})")
 
     album_ids = []
     db = SessionLocal()
@@ -31,7 +37,7 @@ def scan_directory(path: str = None) -> List[int]:
             )
 
             if has_audio:
-                album_id = _scan_album_folder(db, folder_path)
+                album_id = _scan_album_folder(db, folder_path, force=force)
                 if album_id:
                     album_ids.append(album_id)
             else:
@@ -47,7 +53,7 @@ def scan_directory(path: str = None) -> List[int]:
                         if os.path.isfile(os.path.join(sub_path, f))
                     )
                     if has_sub_audio:
-                        album_id = _scan_album_folder(db, sub_path)
+                        album_id = _scan_album_folder(db, sub_path, force=force)
                         if album_id:
                             album_ids.append(album_id)
 
@@ -58,11 +64,17 @@ def scan_directory(path: str = None) -> List[int]:
     return album_ids
 
 
-def _scan_album_folder(db: Session, folder_path: str) -> int | None:
+def _scan_album_folder(db: Session, folder_path: str, force: bool = False) -> int | None:
     existing = db.query(Album).filter(Album.path == folder_path).first()
     if existing:
-        log.debug(f"Album already in database: {folder_path}")
-        return existing.id
+        if not force:
+            log.debug(f"Album already in database: {folder_path}")
+            return existing.id
+        # Force rescan: delete old data and re-import
+        log.info(f"Force rescan: {folder_path}")
+        db.query(Track).filter(Track.album_id == existing.id).delete()
+        db.delete(existing)
+        db.flush()
 
     album_info = scan_album_folder(folder_path)
     if not album_info:

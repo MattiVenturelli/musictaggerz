@@ -7,6 +7,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
 from app.api import albums, settings, stats, websocket
+from app.services.queue_manager import queue_manager
+from app.services.file_watcher import FileWatcher
 from app.utils.logger import log
 
 
@@ -15,8 +17,17 @@ async def lifespan(app: FastAPI):
     log.info("Starting MusicTaggerz...")
     init_db()
     log.info("Database initialized.")
-    # File watcher will be started here in Phase 5
+
+    queue_manager.start()
+    log.info("Queue manager started.")
+
+    watcher = FileWatcher(on_new_folder=queue_manager.enqueue_folder)
+    watcher.start()
+
     yield
+
+    watcher.stop()
+    queue_manager.stop()
     log.info("Shutting down MusicTaggerz.")
 
 

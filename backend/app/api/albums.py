@@ -10,6 +10,7 @@ from app.schemas import (
     TagRequest, ScanRequest, TrackResponse, MatchCandidateResponse,
 )
 from app.services.album_scanner import scan_directory
+from app.services.queue_manager import queue_manager
 
 router = APIRouter()
 
@@ -71,10 +72,9 @@ def get_album(album_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{album_id}/tag")
-async def tag_album(
+def tag_album(
     album_id: int,
     request: TagRequest = TagRequest(),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
 ):
     album = db.query(Album).filter(Album.id == album_id).first()
@@ -84,8 +84,7 @@ async def tag_album(
     album.status = "matching"
     db.commit()
 
-    # Tagging will be implemented in Phase 3-4
-    # background_tasks.add_task(tagging_service.tag_album, album_id, request.release_id)
+    queue_manager.enqueue_album(album_id, release_id=request.release_id)
 
     return {"message": "Tagging queued", "album_id": album_id}
 
@@ -104,9 +103,9 @@ def skip_album(album_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/scan")
-async def trigger_scan(
+def trigger_scan(
     request: ScanRequest = ScanRequest(),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    background_tasks.add_task(scan_directory, request.path)
-    return {"message": "Scan started", "path": request.path}
+    background_tasks.add_task(scan_directory, request.path, request.force)
+    return {"message": "Scan started", "path": request.path, "force": request.force}
