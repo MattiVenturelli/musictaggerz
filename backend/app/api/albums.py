@@ -1,13 +1,16 @@
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import Optional
+from typing import Optional, List
 
 from app.database import get_db
-from app.models import Album, Track, ActivityLog
+from app.models import Album, Track, MatchCandidate, ActivityLog
 from app.schemas import (
     AlbumSummary, AlbumDetail, AlbumListResponse,
     TagRequest, ScanRequest, TrackResponse, MatchCandidateResponse,
+    BatchActionRequest,
 )
 from app.services.album_scanner import scan_directory
 from app.services.queue_manager import queue_manager
@@ -43,6 +46,8 @@ def list_albums(
         "created_asc": Album.created_at.asc(),
         "artist": Album.artist.asc(),
         "album": Album.album.asc(),
+        "confidence_desc": Album.match_confidence.desc(),
+        "confidence_asc": Album.match_confidence.asc(),
     }
     query = query.order_by(sort_map.get(sort, Album.updated_at.desc()))
 
@@ -54,6 +59,37 @@ def list_albums(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/{album_id}/cover")
+def get_album_cover(album_id: int, db: Session = Depends(get_db)):
+    """Serve album cover art image from filesystem."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    # Try the stored cover_path first
+    if album.cover_path and os.path.isfile(album.cover_path):
+        return FileResponse(album.cover_path, media_type=_guess_image_type(album.cover_path))
+
+    # Fallback: look for common cover filenames in the album directory
+    if album.path and os.path.isdir(album.path):
+        candidates = [
+            "cover.jpg", "Cover.jpg", "cover.png", "Cover.png",
+            "albumart.jpg", "AlbumArt.jpg", "folder.jpg", "Folder.jpg",
+            "front.jpg", "Front.jpg", "front.png", "Front.png",
+        ]
+        for name in candidates:
+            filepath = os.path.join(album.path, name)
+            if os.path.isfile(filepath):
+                return FileResponse(filepath, media_type=_guess_image_type(filepath))
+
+    raise HTTPException(status_code=404, detail="Cover art not found")
+
+
+def _guess_image_type(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    return {".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
 
 
 @router.get("/{album_id}", response_model=AlbumDetail)
@@ -89,6 +125,31 @@ def tag_album(
     return {"message": "Tagging queued", "album_id": album_id}
 
 
+@router.post("/{album_id}/retag")
+def retag_album(
+    album_id: int,
+    request: TagRequest = TagRequest(),
+    db: Session = Depends(get_db),
+):
+    """Re-tag an album (reset status and re-match)."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    # Clear old match candidates
+    db.query(MatchCandidate).filter(MatchCandidate.album_id == album_id).delete()
+    album.status = "matching"
+    album.match_confidence = None
+    album.musicbrainz_release_id = None
+    album.error_message = None
+    db.add(ActivityLog(album_id=album_id, action="retag_requested"))
+    db.commit()
+
+    queue_manager.enqueue_album(album_id, release_id=request.release_id)
+
+    return {"message": "Retag queued", "album_id": album_id}
+
+
 @router.post("/{album_id}/skip")
 def skip_album(album_id: int, db: Session = Depends(get_db)):
     album = db.query(Album).filter(Album.id == album_id).first()
@@ -100,6 +161,47 @@ def skip_album(album_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Album skipped", "album_id": album_id}
+
+
+@router.delete("/{album_id}")
+def delete_album(album_id: int, db: Session = Depends(get_db)):
+    """Remove album from database (does NOT delete files)."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    db.delete(album)
+    db.commit()
+
+    return {"message": "Album removed from database", "album_id": album_id}
+
+
+@router.post("/batch/tag")
+def batch_tag(request: BatchActionRequest, db: Session = Depends(get_db)):
+    """Queue multiple albums for tagging."""
+    queued = []
+    for album_id in request.album_ids:
+        album = db.query(Album).filter(Album.id == album_id).first()
+        if album:
+            album.status = "matching"
+            queue_manager.enqueue_album(album_id)
+            queued.append(album_id)
+    db.commit()
+    return {"message": f"Queued {len(queued)} albums", "album_ids": queued}
+
+
+@router.post("/batch/skip")
+def batch_skip(request: BatchActionRequest, db: Session = Depends(get_db)):
+    """Skip multiple albums."""
+    skipped = []
+    for album_id in request.album_ids:
+        album = db.query(Album).filter(Album.id == album_id).first()
+        if album:
+            album.status = "skipped"
+            db.add(ActivityLog(album_id=album_id, action="skipped"))
+            skipped.append(album_id)
+    db.commit()
+    return {"message": f"Skipped {len(skipped)} albums", "album_ids": skipped}
 
 
 @router.post("/scan")

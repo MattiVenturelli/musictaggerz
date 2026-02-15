@@ -82,6 +82,10 @@ class ScanRequest(BaseModel):
     force: bool = False
 
 
+class BatchActionRequest(BaseModel):
+    album_ids: List[int]
+
+
 class StatsResponse(BaseModel):
     total_albums: int
     tagged_count: int
@@ -90,6 +94,9 @@ class StatsResponse(BaseModel):
     needs_review_count: int
     failed_count: int
     skipped_count: int
+    queue_size: int = 0
+    is_processing: bool = False
+    recent_activity: List["ActivityLogResponse"] = []
 
 
 class SettingResponse(BaseModel):

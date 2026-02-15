@@ -7,6 +7,7 @@ from app.core.audio_reader import scan_album_folder, AUDIO_EXTENSIONS, AlbumInfo
 from app.models import Album, Track, ActivityLog
 from app.database import SessionLocal
 from app.config import settings
+from app.services.notification_service import notifications
 from app.utils.logger import log
 
 
@@ -58,6 +59,8 @@ def scan_directory(path: str = None, force: bool = False) -> List[int]:
                             album_ids.append(album_id)
 
         log.info(f"Scan complete. Found {len(album_ids)} albums.")
+        notifications.send_scan_update(len(album_ids), "Scan complete")
+        notifications.send_notification("info", f"Scan complete: {len(album_ids)} albums found")
     finally:
         db.close()
 

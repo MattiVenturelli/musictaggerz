@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from app.database import init_db
 from app.api import albums, settings, stats, websocket
 from app.services.queue_manager import queue_manager
 from app.services.file_watcher import FileWatcher
+from app.services.notification_service import notifications
 from app.utils.logger import log
 
 
@@ -17,6 +19,9 @@ async def lifespan(app: FastAPI):
     log.info("Starting MusicTaggerz...")
     init_db()
     log.info("Database initialized.")
+
+    # Give the notification service access to the event loop for thread-safe broadcast
+    notifications.set_loop(asyncio.get_running_loop())
 
     queue_manager.start()
     log.info("Queue manager started.")

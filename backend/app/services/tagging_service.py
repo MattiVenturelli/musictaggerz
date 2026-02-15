@@ -9,6 +9,7 @@ from app.core.tagger import write_tags, TagData
 from app.core.artwork_fetcher import fetch_artwork, save_artwork_to_folder
 from app.models import Album, Track, MatchCandidate, ActivityLog
 from app.database import SessionLocal
+from app.services.notification_service import notifications
 from app.utils.logger import log
 
 
@@ -35,6 +36,7 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
         # Update status to matching
         album.status = "matching"
         db.commit()
+        notifications.send_album_update(album_id, "matching")
 
         # Step 1: Read local files
         album_info = scan_album_folder(album.path)
@@ -84,6 +86,12 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
                 details=f"Best: {selected_release.title} ({matches[0].total_score:.0f}%)" if matches else None,
             ))
             db.commit()
+            notifications.send_album_update(
+                album_id, "needs_review",
+                confidence=matches[0].total_score if matches else None,
+                artist=selected_release.artist,
+                album=selected_release.title,
+            )
             log.info(f"Album {album_id} queued for review")
             return False
 
@@ -95,6 +103,7 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
                 details=f"Low confidence ({matches[0].total_score:.0f}%)" if matches else None,
             ))
             db.commit()
+            notifications.send_album_update(album_id, "skipped")
             log.info(f"Album {album_id} skipped (low confidence)")
             return False
 
@@ -106,14 +115,17 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
             _mark_selected_candidate(db, album_id, release_id)
 
         # Step 5: Write tags to files
+        notifications.send_progress(album_id, 0.5, "Writing tags...")
         success = _write_album_tags(db, album, selected_release)
         if not success:
             album.status = "failed"
             album.error_message = "Failed to write tags"
             db.commit()
+            notifications.send_album_update(album_id, "failed", error="Failed to write tags")
             return False
 
         # Step 6: Fetch and save artwork
+        notifications.send_progress(album_id, 0.8, "Fetching artwork...")
         _fetch_and_save_artwork(db, album, selected_release)
 
         # Update album metadata from MusicBrainz
@@ -131,6 +143,16 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
         db.commit()
 
         log.info(f"Album {album_id} tagged successfully: {selected_release.artist} - {selected_release.title}")
+        notifications.send_album_update(
+            album_id, "tagged",
+            artist=selected_release.artist,
+            album=selected_release.title,
+            confidence=album.match_confidence,
+        )
+        notifications.send_notification(
+            "success",
+            f"Tagged: {selected_release.artist} - {selected_release.title}",
+        )
         return True
 
     except Exception as e:
@@ -141,6 +163,7 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
                 album.status = "failed"
                 album.error_message = str(e)[:500]
                 db.commit()
+                notifications.send_album_update(album_id, "failed", error=str(e)[:200])
         except Exception:
             pass
         return False
