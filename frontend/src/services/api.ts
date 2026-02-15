@@ -53,6 +53,10 @@ export async function batchSkip(albumIds: number[]): Promise<void> {
   await api.post('/albums/batch/skip', { album_ids: albumIds })
 }
 
+export async function batchTagPending(): Promise<void> {
+  await api.post('/albums/batch/tag-pending')
+}
+
 export async function triggerScan(path?: string, force?: boolean): Promise<void> {
   await api.post('/albums/scan', { path: path || null, force: force || false })
 }
@@ -78,6 +82,29 @@ export async function fetchSettings(): Promise<SettingResponse[]> {
 
 export async function updateSettings(settings: Record<string, string>): Promise<void> {
   await api.put('/settings', { settings })
+}
+
+// Track tags
+export interface TrackTags {
+  track_id: number
+  path: string
+  title: string | null
+  artist: string | null
+  album: string | null
+  album_artist: string | null
+  track_number: number | null
+  disc_number: number | null
+  year: number | null
+  genre: string | null
+  duration: number | null
+  format: string | null
+  has_cover: boolean
+  musicbrainz_recording_id: string | null
+}
+
+export async function fetchTrackTags(albumId: number, trackId: number): Promise<TrackTags> {
+  const { data } = await api.get<TrackTags>(`/albums/${albumId}/tracks/${trackId}/tags`)
+  return data
 }
 
 // Cover art URL helper

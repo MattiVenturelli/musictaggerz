@@ -4,11 +4,11 @@ from typing import Optional
 
 from mutagen.flac import FLAC, Picture
 from mutagen.mp3 import MP3
-from mutagen.mp4 import MP4, MP4Cover
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.id3 import (
-    ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, TCON,
+    ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, TCON, TPUB,
     TXXX, APIC, ID3NoHeaderError,
 )
 
@@ -28,6 +28,8 @@ class TagData:
     disc_total: Optional[int] = None
     year: Optional[int] = None
     genre: Optional[str] = None
+    label: Optional[str] = None
+    country: Optional[str] = None
     musicbrainz_release_id: Optional[str] = None
     musicbrainz_recording_id: Optional[str] = None
     cover_data: Optional[bytes] = None
@@ -79,6 +81,11 @@ def _write_flac(filepath: str, tags: TagData) -> bool:
         audio["date"] = str(tags.year)
     if tags.genre is not None:
         audio["genre"] = tags.genre
+    if tags.label is not None:
+        audio["label"] = tags.label
+        audio["organization"] = tags.label
+    if tags.country is not None:
+        audio["releasecountry"] = tags.country
     if tags.musicbrainz_release_id is not None:
         audio["musicbrainz_albumid"] = tags.musicbrainz_release_id
     if tags.musicbrainz_recording_id is not None:
@@ -139,6 +146,12 @@ def _write_mp3(filepath: str, tags: TagData) -> bool:
     if tags.genre is not None:
         id3.delall("TCON")
         id3.add(TCON(encoding=3, text=tags.genre))
+    if tags.label is not None:
+        id3.delall("TPUB")
+        id3.add(TPUB(encoding=3, text=tags.label))
+    if tags.country is not None:
+        id3.delall("TXXX:MusicBrainz Album Release Country")
+        id3.add(TXXX(encoding=3, desc="MusicBrainz Album Release Country", text=tags.country))
     if tags.musicbrainz_release_id is not None:
         id3.delall("TXXX:MusicBrainz Album Id")
         id3.add(TXXX(encoding=3, desc="MusicBrainz Album Id", text=tags.musicbrainz_release_id))
@@ -180,6 +193,22 @@ def _write_mp4(filepath: str, tags: TagData) -> bool:
         audio["\xa9day"] = [str(tags.year)]
     if tags.genre is not None:
         audio["\xa9gen"] = [tags.genre]
+    if tags.label is not None:
+        audio["----:com.apple.iTunes:LABEL"] = [
+            MP4FreeForm(tags.label.encode("utf-8"))
+        ]
+    if tags.country is not None:
+        audio["----:com.apple.iTunes:MusicBrainz Album Release Country"] = [
+            MP4FreeForm(tags.country.encode("utf-8"))
+        ]
+    if tags.musicbrainz_release_id is not None:
+        audio["----:com.apple.iTunes:MusicBrainz Album Id"] = [
+            MP4FreeForm(tags.musicbrainz_release_id.encode("utf-8"))
+        ]
+    if tags.musicbrainz_recording_id is not None:
+        audio["----:com.apple.iTunes:MusicBrainz Track Id"] = [
+            MP4FreeForm(tags.musicbrainz_recording_id.encode("utf-8"))
+        ]
 
     if tags.cover_data:
         fmt = MP4Cover.FORMAT_JPEG
@@ -221,6 +250,11 @@ def _write_ogg(filepath: str, tags: TagData) -> bool:
         audio["date"] = str(tags.year)
     if tags.genre is not None:
         audio["genre"] = tags.genre
+    if tags.label is not None:
+        audio["label"] = tags.label
+        audio["organization"] = tags.label
+    if tags.country is not None:
+        audio["releasecountry"] = tags.country
     if tags.musicbrainz_release_id is not None:
         audio["musicbrainz_albumid"] = tags.musicbrainz_release_id
     if tags.musicbrainz_recording_id is not None:

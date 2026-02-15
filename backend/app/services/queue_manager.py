@@ -17,6 +17,7 @@ class QueueItem:
     folder_path: Optional[str] = None  # for new folder scan + tag
     album_id: Optional[int] = None     # for direct album tag
     release_id: Optional[str] = None   # optional: specific MusicBrainz release
+    user_initiated: bool = False        # True when user explicitly clicked Tag
     retry_count: int = 0
 
 
@@ -49,11 +50,11 @@ class QueueManager:
         self._queue.put(item)
         log.info(f"Queued folder: {folder_path} (queue size: {self._queue.qsize()})")
 
-    def enqueue_album(self, album_id: int, release_id: Optional[str] = None):
+    def enqueue_album(self, album_id: int, release_id: Optional[str] = None, user_initiated: bool = False):
         """Add an album to the tagging queue."""
-        item = QueueItem(album_id=album_id, release_id=release_id)
+        item = QueueItem(album_id=album_id, release_id=release_id, user_initiated=user_initiated)
         self._queue.put(item)
-        log.info(f"Queued album {album_id} (queue size: {self._queue.qsize()})")
+        log.info(f"Queued album {album_id} (user_initiated={user_initiated}, queue size: {self._queue.qsize()})")
 
     @property
     def queue_size(self) -> int:
@@ -97,8 +98,8 @@ class QueueManager:
         if not album_id:
             return
 
-        log.info(f"Processing album {album_id} (attempt {item.retry_count + 1})")
-        success = process_album(album_id, release_id=item.release_id)
+        log.info(f"Processing album {album_id} (attempt {item.retry_count + 1}, user_initiated={item.user_initiated})")
+        success = process_album(album_id, release_id=item.release_id, user_initiated=item.user_initiated)
 
         if not success and item.retry_count < MAX_RETRIES - 1:
             # Check if it needs review (don't retry those)
@@ -114,6 +115,7 @@ class QueueManager:
             self._handle_retry(QueueItem(
                 album_id=album_id,
                 release_id=item.release_id,
+                user_initiated=item.user_initiated,
                 retry_count=item.retry_count,
             ))
 

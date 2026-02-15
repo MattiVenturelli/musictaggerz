@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.database import init_db
+from app.database import init_db, SessionLocal
+from app.models import Album
+from app.config import settings as app_settings
 from app.api import albums, settings, stats, websocket
 from app.services.queue_manager import queue_manager
 from app.services.file_watcher import FileWatcher
@@ -19,6 +21,7 @@ from app.utils.logger import log
 async def lifespan(app: FastAPI):
     log.info("Starting MusicTaggerz...")
     init_db()
+    app_settings.load_from_db()
     log.info("Database initialized.")
 
     # Give the notification service access to the event loop for thread-safe broadcast
@@ -26,6 +29,17 @@ async def lifespan(app: FastAPI):
 
     queue_manager.start()
     log.info("Queue manager started.")
+
+    # Recovery: re-queue albums stuck in "matching" status from a previous run
+    db = SessionLocal()
+    try:
+        stuck = db.query(Album).filter(Album.status == "matching").all()
+        if stuck:
+            for album in stuck:
+                queue_manager.enqueue_album(album.id)
+            log.info(f"Recovery: re-queued {len(stuck)} albums stuck in 'matching' status")
+    finally:
+        db.close()
 
     watcher = FileWatcher(on_new_folder=queue_manager.enqueue_folder)
     watcher.start()

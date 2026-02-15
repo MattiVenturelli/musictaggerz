@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from app.core.audio_reader import AlbumInfo
-from app.core.musicbrainz_client import MBRelease, search_by_artist_album
+from app.core.musicbrainz_client import MBRelease, search_releases, get_release_details
 from app.config import settings
 from app.utils.logger import log
 
@@ -305,23 +305,23 @@ def find_matches(local: AlbumInfo, limit: int = 10) -> List[MatchScore]:
 
     # Try search variants until we get results
     variants = _generate_search_variants(artist, album)
-    candidates = []
+    search_results = []
 
     for search_artist, search_album in variants:
-        candidates = search_by_artist_album(search_artist, search_album, limit=20)
-        if candidates:
+        search_results = search_releases(search_artist, search_album, limit=15)
+        if search_results:
             if search_album != album:
                 log.info(f"Found results with cleaned name: '{search_album}'")
             break
         log.info(f"No results for '{search_artist}' - '{search_album}', trying next variant...")
 
-    if not candidates:
+    if not search_results:
         log.warning(f"No MusicBrainz results for {artist} - {album} (tried {len(variants)} variants)")
         return []
 
     # Pre-filter: skip releases with wildly different track counts
     filtered = []
-    for release in candidates:
+    for release in search_results:
         if release.track_count > 0:
             diff = abs(release.track_count - local.track_count)
             if diff > local.track_count:  # more than 2x difference
@@ -329,16 +329,26 @@ def find_matches(local: AlbumInfo, limit: int = 10) -> List[MatchScore]:
                 continue
         filtered.append(release)
 
-    log.info(f"Scoring {len(filtered)} candidates (filtered from {len(candidates)})")
+    # Pre-score using search data (no detail fetch needed) to pick top candidates
+    pre_scored = [score_release(local, release) for release in filtered]
+    pre_scored.sort(key=lambda m: m.total_score, reverse=True)
 
-    # Score each candidate
-    scored = [score_release(local, release) for release in filtered]
+    # Fetch full details only for the top 5 candidates (saves ~10s per album)
+    top_n = 5
+    top_candidates = pre_scored[:top_n]
+    log.info(f"Fetching details for top {len(top_candidates)} of {len(filtered)} candidates")
 
-    # Sort by score descending
-    scored.sort(key=lambda m: m.total_score, reverse=True)
+    detailed_scored = []
+    for match in top_candidates:
+        detailed = get_release_details(match.release.release_id)
+        if detailed:
+            detailed_scored.append(score_release(local, detailed))
+
+    # Sort final scores
+    detailed_scored.sort(key=lambda m: m.total_score, reverse=True)
 
     # Return top results
-    return scored[:limit]
+    return detailed_scored[:limit]
 
 
 def decide_action(score: float) -> str:

@@ -12,6 +12,7 @@ from app.schemas import (
     TagRequest, ScanRequest, TrackResponse, MatchCandidateResponse,
     BatchActionRequest,
 )
+from app.core.audio_reader import read_track
 from app.services.album_scanner import scan_directory
 from app.services.queue_manager import queue_manager
 
@@ -59,6 +60,43 @@ def list_albums(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/{album_id}/tracks/{track_id}/tags")
+def get_track_tags(album_id: int, track_id: int, db: Session = Depends(get_db)):
+    """Read current metadata tags directly from the audio file."""
+    track = (
+        db.query(Track)
+        .filter(Track.id == track_id, Track.album_id == album_id)
+        .first()
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    if not os.path.isfile(track.path):
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    info = read_track(track.path)
+    if not info:
+        raise HTTPException(status_code=500, detail="Could not read file tags")
+
+    return {
+        "track_id": track.id,
+        "path": track.path,
+        "title": info.title,
+        "artist": info.artist,
+        "album": info.album,
+        "album_artist": info.album_artist,
+        "track_number": info.track_number,
+        "disc_number": info.disc_number,
+        "year": info.year,
+        "genre": info.genre,
+        "duration": info.duration,
+        "format": info.format,
+        "has_cover": info.has_cover,
+        "musicbrainz_recording_id": info.musicbrainz_recording_id,
+        "musicbrainz_release_id": info.musicbrainz_release_id,
+    }
 
 
 @router.get("/{album_id}/cover")
@@ -120,7 +158,7 @@ def tag_album(
     album.status = "matching"
     db.commit()
 
-    queue_manager.enqueue_album(album_id, release_id=request.release_id)
+    queue_manager.enqueue_album(album_id, release_id=request.release_id, user_initiated=True)
 
     return {"message": "Tagging queued", "album_id": album_id}
 
@@ -145,7 +183,7 @@ def retag_album(
     db.add(ActivityLog(album_id=album_id, action="retag_requested"))
     db.commit()
 
-    queue_manager.enqueue_album(album_id, release_id=request.release_id)
+    queue_manager.enqueue_album(album_id, release_id=request.release_id, user_initiated=True)
 
     return {"message": "Retag queued", "album_id": album_id}
 
@@ -184,10 +222,23 @@ def batch_tag(request: BatchActionRequest, db: Session = Depends(get_db)):
         album = db.query(Album).filter(Album.id == album_id).first()
         if album:
             album.status = "matching"
-            queue_manager.enqueue_album(album_id)
+            queue_manager.enqueue_album(album_id, user_initiated=True)
             queued.append(album_id)
     db.commit()
     return {"message": f"Queued {len(queued)} albums", "album_ids": queued}
+
+
+@router.post("/batch/tag-pending")
+def batch_tag_pending(db: Session = Depends(get_db)):
+    """Queue all untagged albums (pending + needs_review) for tagging."""
+    albums = db.query(Album).filter(Album.status.in_(["pending", "needs_review"])).all()
+    queued = []
+    for album in albums:
+        album.status = "matching"
+        queue_manager.enqueue_album(album.id, user_initiated=True)
+        queued.append(album.id)
+    db.commit()
+    return {"message": f"Queued {len(queued)} albums for tagging", "album_ids": queued}
 
 
 @router.post("/batch/skip")

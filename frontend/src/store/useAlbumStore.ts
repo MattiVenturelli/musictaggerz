@@ -2,6 +2,12 @@ import { create } from 'zustand'
 import type { AlbumSummary, AlbumDetail, AlbumFilters } from '@/types'
 import * as api from '@/services/api'
 
+export interface ProgressInfo {
+  albumId: number
+  progress: number
+  message: string
+}
+
 interface AlbumState {
   albums: AlbumSummary[]
   total: number
@@ -10,10 +16,11 @@ interface AlbumState {
   currentAlbum: AlbumDetail | null
   loading: boolean
   detailLoading: boolean
+  activeProgress: ProgressInfo | null
 
   setFilters: (filters: Partial<AlbumFilters>) => void
-  fetchAlbums: () => Promise<void>
-  fetchAlbum: (id: number) => Promise<void>
+  fetchAlbums: (silent?: boolean) => Promise<void>
+  fetchAlbum: (id: number, silent?: boolean) => Promise<void>
   toggleSelect: (id: number) => void
   selectAll: () => void
   clearSelection: () => void
@@ -24,9 +31,11 @@ interface AlbumState {
   deleteAlbum: (id: number) => Promise<void>
   batchTag: () => Promise<void>
   batchSkip: () => Promise<void>
+  batchTagPending: () => Promise<void>
   triggerScan: () => Promise<void>
 
   handleAlbumUpdate: (albumId: number, status: string, confidence?: number) => void
+  handleProgress: (albumId: number, progress: number, message: string) => void
 }
 
 export const useAlbumStore = create<AlbumState>((set, get) => ({
@@ -37,29 +46,30 @@ export const useAlbumStore = create<AlbumState>((set, get) => ({
   currentAlbum: null,
   loading: false,
   detailLoading: false,
+  activeProgress: null,
 
   setFilters: (filters) => {
     set((s) => ({ filters: { ...s.filters, ...filters, offset: filters.offset ?? 0 } }))
     get().fetchAlbums()
   },
 
-  fetchAlbums: async () => {
-    set({ loading: true })
+  fetchAlbums: async (silent) => {
+    if (!silent) set({ loading: true })
     try {
       const res = await api.fetchAlbums(get().filters)
       set({ albums: res.items, total: res.total })
     } finally {
-      set({ loading: false })
+      if (!silent) set({ loading: false })
     }
   },
 
-  fetchAlbum: async (id) => {
-    set({ detailLoading: true })
+  fetchAlbum: async (id, silent) => {
+    if (!silent) set({ detailLoading: true })
     try {
       const album = await api.fetchAlbum(id)
       set({ currentAlbum: album })
     } finally {
-      set({ detailLoading: false })
+      if (!silent) set({ detailLoading: false })
     }
   },
 
@@ -118,6 +128,11 @@ export const useAlbumStore = create<AlbumState>((set, get) => ({
     get().fetchAlbums()
   },
 
+  batchTagPending: async () => {
+    await api.batchTagPending()
+    get().fetchAlbums()
+  },
+
   triggerScan: async () => {
     await api.triggerScan()
   },
@@ -130,13 +145,26 @@ export const useAlbumStore = create<AlbumState>((set, get) => ({
       ),
     }))
 
-    // If we're viewing this album, refetch full detail (tracks, candidates, etc.)
-    const { currentAlbum } = get()
-    if (currentAlbum?.id === albumId) {
-      get().fetchAlbum(albumId)
+    // Clear progress when tagging completes or fails
+    const terminal = ['tagged', 'failed', 'skipped', 'needs_review']
+    if (terminal.includes(status)) {
+      const { activeProgress } = get()
+      if (activeProgress?.albumId === albumId) {
+        set({ activeProgress: null })
+      }
     }
 
-    // Refresh the album list too
-    get().fetchAlbums()
+    // If we're viewing this album, silently refetch full detail (tracks, candidates, etc.)
+    const { currentAlbum } = get()
+    if (currentAlbum?.id === albumId) {
+      get().fetchAlbum(albumId, true)
+    }
+
+    // Refresh the album list silently (no loading flash)
+    get().fetchAlbums(true)
+  },
+
+  handleProgress: (albumId, progress, message) => {
+    set({ activeProgress: { albumId, progress, message } })
   },
 }))

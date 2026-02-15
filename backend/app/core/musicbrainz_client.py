@@ -51,6 +51,7 @@ class MBRelease:
     barcode: Optional[str] = None
     tracks: List[MBTrack] = field(default_factory=list)
     release_group_id: Optional[str] = None
+    genres: List[str] = field(default_factory=list)
 
 
 def search_releases(artist: str, album: str, limit: int = 20) -> List[MBRelease]:
@@ -128,7 +129,7 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
     try:
         result = musicbrainzngs.get_release_by_id(
             release_id,
-            includes=["recordings", "artist-credits", "labels", "release-groups"],
+            includes=["recordings", "artist-credits", "labels", "release-groups", "tags"],
         )
     except Exception as e:
         log.error(f"MusicBrainz release lookup error for {release_id}: {e}")
@@ -203,6 +204,20 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
                 label = li["label"].get("name")
                 break
 
+    # Collect genres/tags (from release + release-group, sorted by vote count)
+    tag_map: dict[str, int] = {}
+    for tag in r.get("tag-list", []):
+        name = tag.get("name", "").strip()
+        count = int(tag.get("count", 0))
+        if name:
+            tag_map[name] = tag_map.get(name, 0) + count
+    for tag in rg.get("tag-list", []):
+        name = tag.get("name", "").strip()
+        count = int(tag.get("count", 0))
+        if name:
+            tag_map[name] = tag_map.get(name, 0) + count
+    genres = [t for t, _ in sorted(tag_map.items(), key=lambda x: -x[1])]
+
     return MBRelease(
         release_id=r["id"],
         title=r.get("title", ""),
@@ -216,6 +231,7 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
         barcode=barcode,
         tracks=tracks,
         release_group_id=rg.get("id"),
+        genres=genres,
     )
 
 

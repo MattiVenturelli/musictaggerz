@@ -7,6 +7,7 @@ import type { WSMessage } from '@/types'
 
 export function useWebSocket() {
   const handleAlbumUpdate = useAlbumStore((s) => s.handleAlbumUpdate)
+  const handleProgress = useAlbumStore((s) => s.handleProgress)
   const fetchAlbums = useAlbumStore((s) => s.fetchAlbums)
   const fetchStats = useStatsStore((s) => s.fetchStats)
   const addToast = useNotificationStore((s) => s.addToast)
@@ -22,6 +23,9 @@ export function useWebSocket() {
           handleAlbumUpdate(msg.album_id, msg.status, msg.confidence)
           fetchStats()
           break
+        case 'progress':
+          handleProgress(msg.album_id, msg.progress, msg.message)
+          break
         case 'notification':
           addToast(msg.level, msg.message)
           break
@@ -29,9 +33,6 @@ export function useWebSocket() {
           addToast('info', msg.message)
           fetchAlbums()
           fetchStats()
-          break
-        case 'progress':
-          // progress updates are handled in-place via album_update
           break
       }
     })
@@ -47,5 +48,5 @@ export function useWebSocket() {
       wsService.disconnect()
       setWsConnected(false)
     }
-  }, [handleAlbumUpdate, fetchAlbums, fetchStats, addToast, setWsConnected])
+  }, [handleAlbumUpdate, handleProgress, fetchAlbums, fetchStats, addToast, setWsConnected])
 }

@@ -89,6 +89,34 @@ export function SettingsPage() {
       <div className="bg-surface-100 rounded-xl border border-surface-400 p-6">
         {activeTab === 'general' && (
           <div className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Automatic Mode</label>
+              <p className="text-xs text-text-subtle mb-2">
+                When enabled, new albums discovered by scan or file watcher are automatically queued for tagging.
+                When disabled (manual mode), albums are added to the library but you must tag them manually.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => updateDraft('auto_tag_on_scan', draft['auto_tag_on_scan'] === 'true' ? 'false' : 'true')}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                    draft['auto_tag_on_scan'] === 'true'
+                      ? 'bg-accent-green'
+                      : 'bg-surface-400'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-block h-4 w-4 rounded-full bg-white transition-transform',
+                      draft['auto_tag_on_scan'] === 'true' ? 'translate-x-6' : 'translate-x-1'
+                    )}
+                  />
+                </button>
+                <span className="text-sm text-text-muted">
+                  {draft['auto_tag_on_scan'] === 'true' ? 'Automatic' : 'Manual'}
+                </span>
+              </div>
+            </div>
             <SettingField
               label="Auto-tag Confidence Threshold"
               description="Albums above this confidence score will be tagged automatically"

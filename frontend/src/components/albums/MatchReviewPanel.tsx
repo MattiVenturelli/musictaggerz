@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Tag, SkipForward, RefreshCw, Trash2 } from 'lucide-react'
+import { Tag, SkipForward, RefreshCw, Trash2, Disc3 } from 'lucide-react'
 import type { AlbumDetail, MatchCandidateResponse } from '@/types'
 import { ConfidenceIndicator, ConfirmDialog } from '@/components/common'
 import { useAlbumStore } from '@/store/useAlbumStore'
@@ -123,9 +123,11 @@ function CandidateRow({
   onSelect: () => void
   currentAlbum: AlbumDetail
 }) {
+  const [coverError, setCoverError] = useState(false)
   const artistChanged = candidate.artist && candidate.artist !== currentAlbum.artist
   const albumChanged = candidate.album && candidate.album !== currentAlbum.album
-  const yearChanged = candidate.year && candidate.year !== currentAlbum.year
+
+  const coverUrl = `https://coverartarchive.org/release/${candidate.musicbrainz_release_id}/front-250`
 
   return (
     <button
@@ -137,7 +139,24 @@ function CandidateRow({
           : 'border-surface-400 hover:border-surface-500 bg-surface-200'
       )}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start gap-3">
+        {/* Cover art thumbnail */}
+        <div className="w-14 h-14 rounded-md bg-surface-300 overflow-hidden shrink-0 border border-surface-400">
+          {!coverError ? (
+            <img
+              src={coverUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              onError={() => setCoverError(true)}
+              loading="lazy"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <Disc3 className="h-6 w-6 text-surface-500" />
+            </div>
+          )}
+        </div>
+
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <p className="text-sm font-medium text-text truncate">
@@ -152,7 +171,9 @@ function CandidateRow({
           <div className="flex items-center gap-2 mt-0.5">
             <p className="text-xs text-text-muted truncate">
               {candidate.artist || 'Unknown'}
-              {candidate.year ? ` (${candidate.year})` : ''}
+              {candidate.original_year
+                ? ` (${candidate.original_year})`
+                : candidate.year ? ` (${candidate.year})` : ''}
             </p>
             {artistChanged && (
               <span className="text-[10px] px-1 py-0.5 rounded bg-accent-yellow/15 text-accent-yellow shrink-0">

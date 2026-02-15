@@ -1,16 +1,25 @@
 import { useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Disc3 } from 'lucide-react'
 import { useAlbumStore } from '@/store/useAlbumStore'
 import { LoadingSpinner, EmptyState, Pagination } from '@/components/common'
 import { AlbumCard } from './AlbumCard'
 import { AlbumFilters } from './AlbumFilters'
+import type { AlbumStatus } from '@/types'
 
 export function AlbumListPage() {
   const { albums, total, filters, loading, selectedIds, toggleSelect, fetchAlbums, setFilters } = useAlbumStore()
+  const [searchParams] = useSearchParams()
 
+  // Apply status filter from URL query param (e.g. /albums?status=tagged)
   useEffect(() => {
-    fetchAlbums()
-  }, [fetchAlbums])
+    const urlStatus = searchParams.get('status') as AlbumStatus | null
+    if (urlStatus && urlStatus !== filters.status) {
+      setFilters({ status: urlStatus })
+    } else if (!urlStatus && !filters.status) {
+      fetchAlbums()
+    }
+  }, [searchParams])
 
   return (
     <div className="max-w-7xl space-y-6">

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Disc3, Tag, AlertTriangle, Eye, FolderSearch } from 'lucide-react'
+import { Disc3, Tag, AlertTriangle, Eye, FolderSearch, Play } from 'lucide-react'
 import { useStatsStore } from '@/store/useStatsStore'
 import { useAlbumStore } from '@/store/useAlbumStore'
 import { useNotificationStore } from '@/store/useNotificationStore'
@@ -11,6 +11,7 @@ import { ActivityFeed } from './ActivityFeed'
 export function DashboardPage() {
   const { stats, loading, fetchStats } = useStatsStore()
   const triggerScan = useAlbumStore((s) => s.triggerScan)
+  const batchTagPending = useAlbumStore((s) => s.batchTagPending)
   const addToast = useNotificationStore((s) => s.addToast)
 
   useEffect(() => {
@@ -23,6 +24,16 @@ export function DashboardPage() {
       addToast('info', 'Scan started...')
     } catch {
       addToast('error', 'Failed to start scan')
+    }
+  }
+
+  const handleTagAllPending = async () => {
+    try {
+      await batchTagPending()
+      addToast('info', 'Queued all pending albums for tagging')
+      fetchStats()
+    } catch {
+      addToast('error', 'Failed to queue pending albums')
     }
   }
 
@@ -51,20 +62,31 @@ export function DashboardPage() {
     <div className="max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-text">Dashboard</h1>
-        <button
-          onClick={handleScan}
-          className="flex items-center gap-2 px-4 py-2 bg-accent-blue text-surface-300 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          <FolderSearch className="h-4 w-4" />
-          Scan Now
-        </button>
+        <div className="flex items-center gap-2">
+          {(s.pending_count + s.needs_review_count) > 0 && (
+            <button
+              onClick={handleTagAllPending}
+              className="flex items-center gap-2 px-4 py-2 bg-accent-green text-surface-300 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              <Play className="h-4 w-4" />
+              Tag All ({s.pending_count + s.needs_review_count})
+            </button>
+          )}
+          <button
+            onClick={handleScan}
+            className="flex items-center gap-2 px-4 py-2 bg-accent-blue text-surface-300 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <FolderSearch className="h-4 w-4" />
+            Scan Now
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Disc3} title="Total Albums" value={s.total_albums} color="text-accent-lavender" />
-        <StatCard icon={Tag} title="Tagged" value={s.tagged_count} color="text-accent-green" />
-        <StatCard icon={Eye} title="Needs Review" value={s.needs_review_count} color="text-accent-peach" />
-        <StatCard icon={AlertTriangle} title="Failed" value={s.failed_count} color="text-accent-red" />
+        <StatCard icon={Disc3} title="Total Albums" value={s.total_albums} color="text-accent-lavender" href="/albums" />
+        <StatCard icon={Tag} title="Tagged" value={s.tagged_count} color="text-accent-green" href="/albums?status=tagged" />
+        <StatCard icon={Eye} title="Needs Review" value={s.needs_review_count} color="text-accent-peach" href="/albums?status=needs_review" />
+        <StatCard icon={AlertTriangle} title="Failed" value={s.failed_count} color="text-accent-red" href="/albums?status=failed" />
       </div>
 
       <ProgressBar stats={s} />

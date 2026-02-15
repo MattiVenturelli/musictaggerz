@@ -1,11 +1,30 @@
 import os
 import struct
+import unicodedata
+import re
 from typing import Optional, List, Tuple
 
 import httpx
 
 from app.config import settings
 from app.utils.logger import log
+
+
+def _normalize(text: str) -> str:
+    """Normalize text for fuzzy comparison."""
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^a-z0-9 ]", "", text.lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _text_match(a: str, b: str) -> float:
+    """Word overlap ratio between two strings (0.0-1.0)."""
+    wa = set(_normalize(a).split())
+    wb = set(_normalize(b).split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / max(len(wa | wb), 1)
 
 # Timeout for HTTP requests
 HTTP_TIMEOUT = 30.0
@@ -133,7 +152,20 @@ def fetch_from_itunes(artist: str, album: str) -> Optional[Tuple[bytes, str]]:
         log.debug(f"iTunes: no results for '{artist}' - '{album}'")
         return None
 
+    # Score results by artist+album similarity, pick best match
+    scored = []
     for result in results:
+        r_artist = result.get("artistName", "")
+        r_album = result.get("collectionName", "")
+        score = _text_match(artist, r_artist) * 0.5 + _text_match(album, r_album) * 0.5
+        scored.append((score, result))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    for score, result in scored:
+        if score < 0.3:
+            log.debug(f"iTunes: skipping '{result.get('artistName')}' - '{result.get('collectionName')}' (score {score:.2f})")
+            continue
+
         artwork_url = result.get("artworkUrl100", "")
         if not artwork_url:
             continue
@@ -144,7 +176,7 @@ def fetch_from_itunes(artist: str, album: str) -> Optional[Tuple[bytes, str]]:
         image_data = _download_image(hires_url)
         if image_data and _check_min_size(image_data, settings.artwork_min_size):
             w, h = _get_image_size(image_data)
-            log.info(f"iTunes cover: {w}x{h} for '{artist}' - '{album}'")
+            log.info(f"iTunes cover: {w}x{h} for '{artist}' - '{album}' (match: {score:.2f}, from: '{result.get('artistName')}' - '{result.get('collectionName')}')")
             return image_data, "image/jpeg"
 
     log.debug(f"iTunes: no suitable artwork for '{artist}' - '{album}'")

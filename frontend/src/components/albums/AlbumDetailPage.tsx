@@ -6,12 +6,14 @@ import { LoadingSpinner, StatusBadge, ConfidenceIndicator } from '@/components/c
 import { getAlbumCoverUrl } from '@/services/api'
 import { TrackList } from './TrackList'
 import { MatchReviewPanel } from './MatchReviewPanel'
+import { ProgressPanel } from './ProgressPanel'
 
 export function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { currentAlbum: album, detailLoading, fetchAlbum } = useAlbumStore()
   const [imgError, setImgError] = useState(false)
+  const coverUrl = `${getAlbumCoverUrl(album?.id ?? 0)}?t=${album?.updated_at ?? ''}`
 
   useEffect(() => {
     if (id) {
@@ -19,6 +21,11 @@ export function AlbumDetailPage() {
       setImgError(false)
     }
   }, [id, fetchAlbum])
+
+  // Reset image error when album data changes (e.g. cover fetched after tagging)
+  useEffect(() => {
+    setImgError(false)
+  }, [album?.updated_at, album?.cover_path])
 
   if (detailLoading || !album) {
     return (
@@ -45,7 +52,7 @@ export function AlbumDetailPage() {
         <div className="w-48 h-48 rounded-xl bg-surface-200 overflow-hidden shrink-0 border border-surface-400">
           {!imgError ? (
             <img
-              src={getAlbumCoverUrl(album.id)}
+              src={coverUrl}
               alt={`${album.artist} - ${album.album}`}
               className="w-full h-full object-cover"
               onError={() => setImgError(true)}
@@ -88,6 +95,9 @@ export function AlbumDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Progress */}
+      <ProgressPanel albumId={album.id} />
 
       {/* Actions / Match review */}
       <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">

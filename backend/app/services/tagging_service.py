@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -9,17 +10,24 @@ from app.core.tagger import write_tags, TagData
 from app.core.artwork_fetcher import fetch_artwork, save_artwork_to_folder
 from app.models import Album, Track, MatchCandidate, ActivityLog
 from app.database import SessionLocal
+from app.config import settings
 from app.services.notification_service import notifications
 from app.utils.logger import log
 
 
-def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
+def _progress(album_id: int, progress: float, message: str):
+    """Send progress update with a small delay to let the event loop flush."""
+    notifications.send_progress(album_id, progress, message)
+    time.sleep(0.08)  # give the async event loop time to deliver the WS message
+
+
+def process_album(album_id: int, release_id: Optional[str] = None, user_initiated: bool = False) -> bool:
     """Full tagging workflow for an album.
 
     1. Read local files
     2. Match on MusicBrainz (or use provided release_id)
     3. Score candidates, store in DB
-    4. If auto_tag or release_id provided: write tags + fetch artwork
+    4. Decide action: write tags only if user_initiated OR auto mode is on
     5. Update DB status
 
     Returns True if tags were written.
@@ -37,6 +45,7 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
         album.status = "matching"
         db.commit()
         notifications.send_album_update(album_id, "matching")
+        _progress(album_id, 0.05, "Reading local files...")
 
         # Step 1: Read local files
         album_info = scan_album_folder(album.path)
@@ -47,8 +56,10 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
             return False
 
         # Step 2: Match on MusicBrainz
+        _progress(album_id, 0.1, "Searching MusicBrainz...")
         if release_id:
             # User selected a specific release
+            _progress(album_id, 0.15, f"Fetching release {release_id[:8]}...")
             selected_release = get_release_details(release_id)
             if not selected_release:
                 album.status = "failed"
@@ -67,6 +78,8 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
                 db.commit()
                 return False
 
+            _progress(album_id, 0.25, f"Found {len(matches)} candidates, scoring...")
+
             # Step 3: Store candidates in DB
             _store_candidates(db, album_id, matches)
 
@@ -74,6 +87,15 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
             action = decide_action(best.total_score)
             selected_release = best.release
 
+            # Manual mode: never auto-tag unless user explicitly triggered it
+            if action == "auto_tag" and not user_initiated and not settings.auto_tag_on_scan:
+                action = "needs_review"
+                log.info(f"Manual mode: downgrading auto_tag to needs_review for album {album_id}")
+
+            _progress(
+                album_id, 0.3,
+                f"Best: {selected_release.artist} - {selected_release.title} ({best.total_score:.0f}%)"
+            )
             log.info(f"Best match: {selected_release.artist} - {selected_release.title} "
                       f"({best.total_score:.1f}/100) -> {action}")
 
@@ -115,8 +137,8 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
             _mark_selected_candidate(db, album_id, release_id)
 
         # Step 5: Write tags to files
-        notifications.send_progress(album_id, 0.5, "Writing tags...")
-        success = _write_album_tags(db, album, selected_release)
+        _progress(album_id, 0.4, "Writing tags to files...")
+        success = _write_album_tags(db, album, selected_release, album_id)
         if not success:
             album.status = "failed"
             album.error_message = "Failed to write tags"
@@ -125,8 +147,10 @@ def process_album(album_id: int, release_id: Optional[str] = None) -> bool:
             return False
 
         # Step 6: Fetch and save artwork
-        notifications.send_progress(album_id, 0.8, "Fetching artwork...")
+        _progress(album_id, 0.75, "Fetching artwork...")
         _fetch_and_save_artwork(db, album, selected_release)
+
+        _progress(album_id, 0.95, "Finalizing...")
 
         # Update album metadata from MusicBrainz
         album.artist = selected_release.artist
@@ -210,7 +234,7 @@ def _mark_selected_candidate(db: Session, album_id: int, release_id: str):
     db.flush()
 
 
-def _write_album_tags(db: Session, album: Album, release: MBRelease) -> bool:
+def _write_album_tags(db: Session, album: Album, release: MBRelease, album_id: int = 0) -> bool:
     """Write tags to all tracks in the album."""
     tracks = db.query(Track).filter(Track.album_id == album.id).order_by(
         Track.disc_number, Track.track_number
@@ -219,9 +243,13 @@ def _write_album_tags(db: Session, album: Album, release: MBRelease) -> bool:
     mb_tracks = sorted(release.tracks, key=lambda t: t.position)
     track_total = release.track_count
     year = release.original_year or release.year
+    total = len(tracks)
 
     success_count = 0
     for i, track in enumerate(tracks):
+        if album_id and total > 0:
+            pct = 0.4 + (i / total) * 0.3  # progress 0.4 -> 0.7
+            _progress(album_id, pct, f"Writing track {i+1}/{total}: {mb_tracks[i].title if i < len(mb_tracks) else track.title}")
         # Match local track to MB track by position
         mb_track = mb_tracks[i] if i < len(mb_tracks) else None
 
@@ -230,6 +258,9 @@ def _write_album_tags(db: Session, album: Album, release: MBRelease) -> bool:
             album_artist=release.artist,
             album=release.title,
             year=year,
+            genre=release.genres[0].title() if release.genres else None,
+            label=release.label,
+            country=release.country,
             track_total=track_total,
             disc_number=track.disc_number or 1,
             musicbrainz_release_id=release.release_id,

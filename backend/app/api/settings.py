@@ -5,6 +5,7 @@ from typing import List
 from app.database import get_db
 from app.models import Setting
 from app.schemas import SettingResponse, SettingsUpdateRequest
+from app.config import settings as app_settings
 
 router = APIRouter()
 
@@ -27,4 +28,9 @@ def update_settings(request: SettingsUpdateRequest, db: Session = Depends(get_db
             db.add(new_setting)
             updated.append(key)
     db.commit()
+
+    # Sync to runtime config so core modules pick up the new values
+    for key, value in request.settings.items():
+        app_settings.apply_from_db(key, str(value))
+
     return {"updated": updated}

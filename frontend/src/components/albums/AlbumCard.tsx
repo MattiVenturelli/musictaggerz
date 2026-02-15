@@ -26,7 +26,7 @@ export function AlbumCard({ album, selected, onToggleSelect }: Props) {
       <div className="relative aspect-square bg-surface-200" onClick={() => navigate(`/albums/${album.id}`)}>
         {!imgError ? (
           <img
-            src={getAlbumCoverUrl(album.id)}
+            src={`${getAlbumCoverUrl(album.id)}?t=${album.updated_at ?? ''}`}
             alt={`${album.artist} - ${album.album}`}
             className="w-full h-full object-cover"
             onError={() => setImgError(true)}

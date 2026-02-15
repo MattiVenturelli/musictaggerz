@@ -29,6 +29,8 @@ class TrackInfo:
     duration: Optional[float] = None
     format: Optional[str] = None
     has_cover: bool = False
+    musicbrainz_recording_id: Optional[str] = None
+    musicbrainz_release_id: Optional[str] = None
 
 
 @dataclass
@@ -77,6 +79,8 @@ def _read_flac(filepath: str) -> TrackInfo:
         duration=audio.info.length if audio.info else None,
         format="FLAC",
         has_cover=len(audio.pictures) > 0,
+        musicbrainz_recording_id=_safe_str(audio.get("musicbrainz_trackid")),
+        musicbrainz_release_id=_safe_str(audio.get("musicbrainz_albumid")),
     )
 
 
@@ -87,6 +91,7 @@ def _read_mp3(filepath: str) -> TrackInfo:
     title = artist = album = album_artist = genre = None
     track_number = disc_number = year = None
     has_cover = False
+    mb_recording_id = mb_release_id = None
 
     if tags:
         title = _safe_str(tags.get("TIT2"))
@@ -98,6 +103,13 @@ def _read_mp3(filepath: str) -> TrackInfo:
         disc_number = _safe_int(tags.get("TPOS"))
         year = _safe_int(tags.get("TDRC"))
         has_cover = len(tags.getall("APIC")) > 0
+        # MusicBrainz IDs stored as TXXX frames
+        txxx_album = tags.get("TXXX:MusicBrainz Album Id")
+        if txxx_album:
+            mb_release_id = _safe_str(txxx_album)
+        txxx_rec = tags.get("TXXX:MusicBrainz Recording Id")
+        if txxx_rec:
+            mb_recording_id = _safe_str(txxx_rec)
 
     return TrackInfo(
         path=filepath,
@@ -112,6 +124,8 @@ def _read_mp3(filepath: str) -> TrackInfo:
         duration=audio.info.length if audio.info else None,
         format="MP3",
         has_cover=has_cover,
+        musicbrainz_recording_id=mb_recording_id,
+        musicbrainz_release_id=mb_release_id,
     )
 
 
@@ -124,6 +138,16 @@ def _read_mp4(filepath: str) -> TrackInfo:
         track_num = audio["trkn"][0][0]
     if audio.get("disk"):
         disc_num = audio["disk"][0][0]
+
+    # MusicBrainz IDs in freeform atoms (MusicBrainz Picard convention)
+    mb_recording_id = None
+    mb_release_id = None
+    mb_rec_raw = audio.get("----:com.apple.iTunes:MusicBrainz Track Id")
+    if mb_rec_raw:
+        mb_recording_id = mb_rec_raw[0].decode("utf-8", errors="ignore") if isinstance(mb_rec_raw[0], bytes) else str(mb_rec_raw[0])
+    mb_rel_raw = audio.get("----:com.apple.iTunes:MusicBrainz Album Id")
+    if mb_rel_raw:
+        mb_release_id = mb_rel_raw[0].decode("utf-8", errors="ignore") if isinstance(mb_rel_raw[0], bytes) else str(mb_rel_raw[0])
 
     return TrackInfo(
         path=filepath,
@@ -138,6 +162,8 @@ def _read_mp4(filepath: str) -> TrackInfo:
         duration=audio.info.length if audio.info else None,
         format="M4A",
         has_cover="covr" in audio,
+        musicbrainz_recording_id=mb_recording_id,
+        musicbrainz_release_id=mb_release_id,
     )
 
 
@@ -161,6 +187,8 @@ def _read_ogg(filepath: str) -> TrackInfo:
         duration=audio.info.length if audio.info else None,
         format="OGG",
         has_cover=False,
+        musicbrainz_recording_id=_safe_str(audio.get("musicbrainz_trackid")),
+        musicbrainz_release_id=_safe_str(audio.get("musicbrainz_albumid")),
     )
 
 
