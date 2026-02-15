@@ -92,6 +92,8 @@ class MBTrack:
     title: str
     duration_ms: Optional[int] = None
     recording_id: Optional[str] = None
+    disc_number: int = 1
+    disc_position: int = 0
 
     @property
     def duration_seconds(self) -> Optional[float]:
@@ -115,6 +117,8 @@ class MBRelease:
     tracks: List[MBTrack] = field(default_factory=list)
     release_group_id: Optional[str] = None
     genres: List[str] = field(default_factory=list)
+    disc_count: int = 1
+    disc_track_counts: dict[int, int] = field(default_factory=dict)
 
 
 def _pick_best_genres(genre_map: dict[str, int]) -> List[str]:
@@ -186,11 +190,14 @@ def search_releases(artist: str, album: str, limit: int = 20) -> List[MBRelease]
 
         track_count = 0
         media_type = None
+        disc_count = 0
         if "medium-list" in r:
             for medium in r["medium-list"]:
                 track_count += int(medium.get("track-count", 0))
+                disc_count += 1
                 if not media_type:
                     media_type = medium.get("format")
+        disc_count = max(disc_count, 1)
 
         label = None
         if "label-info-list" in r:
@@ -210,6 +217,7 @@ def search_releases(artist: str, album: str, limit: int = 20) -> List[MBRelease]
             label=label,
             barcode=r.get("barcode"),
             release_group_id=r.get("release-group", {}).get("id"),
+            disc_count=disc_count,
         ))
 
     log.info(f"MusicBrainz found {len(releases)} releases for '{artist}' - '{album}'")
@@ -263,12 +271,15 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
     label = None
     barcode = r.get("barcode")
     total_track_count = 0
+    disc_track_counts: dict[int, int] = {}
 
     if "medium-list" in r:
-        for medium in r["medium-list"]:
+        for disc_idx, medium in enumerate(r["medium-list"], start=1):
             if not media_type:
                 media_type = medium.get("format")
             disc_offset = total_track_count
+            medium_track_count = int(medium.get("track-count", 0))
+            disc_track_counts[disc_idx] = medium_track_count
             for t in medium.get("track-list", []):
                 rec = t.get("recording", {})
                 duration_ms = None
@@ -283,14 +294,17 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
                     except (ValueError, TypeError):
                         pass
 
-                position = disc_offset + int(t.get("position", 0))
+                disc_position = int(t.get("position", 0))
+                position = disc_offset + disc_position
                 tracks.append(MBTrack(
                     position=position,
                     title=rec.get("title", t.get("title", "")),
                     duration_ms=duration_ms,
                     recording_id=rec.get("id"),
+                    disc_number=disc_idx,
+                    disc_position=disc_position,
                 ))
-            total_track_count += int(medium.get("track-count", 0))
+            total_track_count += medium_track_count
 
     if "label-info-list" in r:
         for li in r["label-info-list"]:
@@ -312,6 +326,8 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
             genre_map[name] = genre_map.get(name, 0) + count
     genres = _pick_best_genres(genre_map)
 
+    disc_count = max(len(disc_track_counts), 1)
+
     return MBRelease(
         release_id=r["id"],
         title=r.get("title", ""),
@@ -326,6 +342,8 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
         tracks=tracks,
         release_group_id=rg.get("id"),
         genres=genres,
+        disc_count=disc_count,
+        disc_track_counts=disc_track_counts,
     )
 
 

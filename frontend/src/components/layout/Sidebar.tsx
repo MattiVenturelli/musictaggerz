@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Disc3, Settings, Wifi, WifiOff, Music } from 'lucide-react'
+import { LayoutDashboard, Disc3, Settings, Wifi, WifiOff } from 'lucide-react'
+
 import { useNotificationStore } from '@/store/useNotificationStore'
 import { cn } from '@/utils'
+
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -15,7 +17,7 @@ export function Sidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 w-64 bg-surface-200 border-r border-surface-400 flex flex-col z-40">
       <div className="flex items-center gap-3 px-6 h-16 border-b border-surface-400">
-        <Music className="h-7 w-7 text-accent-mauve" />
+        <img src="/logo.svg" alt="MusicTaggerz" className="h-7 w-7" />
         <span className="text-lg font-bold text-text tracking-tight">MusicTaggerz</span>
       </div>
 

@@ -3,7 +3,7 @@ import time
 import threading
 from typing import Callable, Optional
 
-from app.core.audio_reader import AUDIO_EXTENSIONS
+from app.core.audio_reader import AUDIO_EXTENSIONS, is_disc_subfolder, find_disc_subfolders
 from app.config import settings
 from app.utils.logger import log
 
@@ -82,11 +82,7 @@ class _PollingScanner:
             if not os.path.isdir(entry_path):
                 continue
 
-            # Walk the entire tree under each top-level folder to find
-            # any directory with audio files (handles Artist/Album,
-            # Artist/Album/Disc, and flat layouts)
             for root, dirs, files in os.walk(entry_path):
-                # Skip hidden directories
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
 
                 if root in self._known_folders:
@@ -98,6 +94,20 @@ class _PollingScanner:
                     if not f.startswith(".")
                 )
                 if has_audio:
+                    # Check if this is a disc subfolder — register parent instead
+                    folder_name = os.path.basename(root)
+                    if is_disc_subfolder(folder_name):
+                        parent_path = os.path.dirname(root)
+                        if parent_path not in self._known_folders:
+                            disc_subs = find_disc_subfolders(parent_path)
+                            if disc_subs:
+                                log.info(f"New multi-disc album detected: {parent_path}")
+                                self._known_folders.add(parent_path)
+                                # Mark all disc subfolders as known
+                                for disc_path in disc_subs.values():
+                                    self._known_folders.add(disc_path)
+                                self._callback(parent_path)
+                                continue
                     log.info(f"New album folder detected: {root}")
                     self._known_folders.add(root)
                     self._callback(root)

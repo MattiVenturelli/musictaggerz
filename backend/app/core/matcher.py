@@ -107,27 +107,45 @@ def _score_track_count(local: AlbumInfo, release: MBRelease) -> tuple[float, lis
 
 
 def _score_durations(local: AlbumInfo, release: MBRelease) -> tuple[float, list[str]]:
-    """Score duration match (max 20 points). Compare per-track durations."""
+    """Score duration match (max 20 points). Compare per-track durations.
+
+    For multi-disc albums, matches by (disc_number, track_number) first,
+    falling back to flat index order.
+    """
     local_tracks = sorted(
         [t for t in local.tracks if t.duration],
         key=lambda t: (t.disc_number or 1, t.track_number or 0),
     )
-    mb_tracks = sorted(release.tracks, key=lambda t: t.position)
 
-    if not local_tracks or not mb_tracks:
+    if not local_tracks or not release.tracks:
         return 0.0, ["No duration data available"]
 
-    # Match tracks by position order
-    pairs = min(len(local_tracks), len(mb_tracks))
-    if pairs == 0:
-        return 0.0, ["No tracks to compare"]
+    # Build MB lookup by (disc_number, disc_position)
+    mb_by_disc: dict[tuple[int, int], 'MBTrack'] = {}
+    for mt in release.tracks:
+        if mt.disc_position > 0:
+            mb_by_disc[(mt.disc_number, mt.disc_position)] = mt
+
+    mb_flat = sorted(release.tracks, key=lambda t: t.position)
 
     total_deviation = 0.0
     matched = 0
 
-    for i in range(pairs):
-        local_dur = local_tracks[i].duration
-        mb_dur = mb_tracks[i].duration_seconds
+    for i, lt in enumerate(local_tracks):
+        mb_track = None
+        # Try disc-aware lookup first
+        disc = lt.disc_number or 1
+        trk = lt.track_number or 0
+        if trk > 0 and (disc, trk) in mb_by_disc:
+            mb_track = mb_by_disc[(disc, trk)]
+        elif i < len(mb_flat):
+            mb_track = mb_flat[i]
+
+        if mb_track is None:
+            continue
+
+        local_dur = lt.duration
+        mb_dur = mb_track.duration_seconds
 
         if local_dur and mb_dur and mb_dur > 0:
             deviation = abs(local_dur - mb_dur) / mb_dur
@@ -206,11 +224,19 @@ def _calculate_penalties(local: AlbumInfo, release: MBRelease) -> tuple[float, l
     penalty = 0.0
     details = []
 
-    # Penalize multi-disc releases when local album is single disc
     local_discs = set(t.disc_number or 1 for t in local.tracks)
-    if len(local_discs) == 1 and release.track_count > local.track_count + 5:
+    local_is_single = len(local_discs) <= 1
+    mb_is_multi = release.disc_count > 1
+
+    # Penalize only when local is single-disc but MB is multi-disc with many more tracks
+    if local_is_single and mb_is_multi and release.track_count > local.track_count + 5:
         penalty += 15.0
-        details.append(f"Multi-disc penalty: MB has {release.track_count} tracks vs local {local.track_count} (-15)")
+        details.append(f"Multi-disc penalty: MB has {release.track_count} tracks ({release.disc_count} discs) vs local {local.track_count} (-15)")
+
+    # Penalize when local is multi-disc but MB is single-disc
+    if not local_is_single and not mb_is_multi:
+        penalty += 10.0
+        details.append(f"Disc mismatch: local has {len(local_discs)} discs but MB is single-disc (-10)")
 
     return penalty, details
 

@@ -37,6 +37,8 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
     _seed_default_settings()
+    _migrate_json_list_settings()
+    _migrate_disc_patterns_to_json()
 
 
 def _migrate_add_columns():
@@ -52,13 +54,10 @@ def _migrate_add_columns():
 
 
 def _seed_default_settings():
+    import json as _json
     from app.models import Setting
     db = SessionLocal()
     try:
-        existing = db.query(Setting).count()
-        if existing > 0:
-            return
-
         defaults = [
             Setting(key="confidence_auto_threshold", value="85", value_type="float",
                     description="Auto-tag if confidence >= this"),
@@ -80,13 +79,60 @@ def _seed_default_settings():
                     description="Spotify client ID"),
             Setting(key="spotify_client_secret", value="", value_type="string",
                     description="Spotify client secret"),
-            Setting(key="preferred_countries", value='["US","GB","DE","IT"]',
-                    value_type="json", description="Preferred release countries"),
-            Setting(key="preferred_media", value='["Digital Media","CD"]',
-                    value_type="json", description="Preferred media types"),
+            Setting(key="preferred_countries", value="US,GB,DE,IT",
+                    value_type="list", description="Preferred release countries"),
+            Setting(key="preferred_media", value="Digital Media,CD",
+                    value_type="list", description="Preferred media types"),
+            Setting(key="disc_subfolder_patterns",
+                    value=_json.dumps([
+                        r"^(?:cd|disc|disk)\s*(\d+)$",
+                        r"^(?:(?:7|10|12)\s*(?:inch\s*)?)?vinyl\s*(\d+)$",
+                        r"^side\s*([A-Da-d\d])$",
+                        r"^cassette\s*(\d+)$",
+                    ]),
+                    value_type="list",
+                    description="Regex patterns to detect disc subfolders (one capture group each)"),
         ]
-        db.add_all(defaults)
+        for d in defaults:
+            existing = db.query(Setting).filter(Setting.key == d.key).first()
+            if not existing:
+                db.add(d)
         db.commit()
+    finally:
+        db.close()
+
+
+def _migrate_json_list_settings():
+    """Convert list settings from JSON array format to comma-separated."""
+    import json as _json
+    from app.models import Setting
+    db = SessionLocal()
+    try:
+        for key in ("preferred_countries", "preferred_media", "artwork_sources"):
+            s = db.query(Setting).filter(Setting.key == key).first()
+            if s and s.value and s.value.startswith("["):
+                try:
+                    parsed = _json.loads(s.value)
+                    if isinstance(parsed, list):
+                        s.value = ",".join(str(v) for v in parsed)
+                except _json.JSONDecodeError:
+                    pass
+        db.commit()
+    finally:
+        db.close()
+
+
+def _migrate_disc_patterns_to_json():
+    """Convert disc_subfolder_patterns from comma-separated to JSON array."""
+    import json as _json
+    from app.models import Setting
+    db = SessionLocal()
+    try:
+        s = db.query(Setting).filter(Setting.key == "disc_subfolder_patterns").first()
+        if s and s.value and not s.value.startswith("["):
+            patterns = [p.strip() for p in s.value.split(",") if p.strip()]
+            s.value = _json.dumps(patterns)
+            db.commit()
     finally:
         db.close()
 

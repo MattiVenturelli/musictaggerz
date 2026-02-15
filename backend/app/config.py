@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     preferred_countries: List[str] = ["US", "GB", "DE", "IT"]
     preferred_media: List[str] = ["Digital Media", "CD"]
 
+    disc_subfolder_patterns: List[str] = [
+        r"^(?:cd|disc|disk)\s*(\d+)$",
+        r"^(?:(?:7|10|12)\s*(?:inch\s*)?)?vinyl\s*(\d+)$",
+        r"^side\s*([A-Da-d\d])$",
+        r"^cassette\s*(\d+)$",
+    ]
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -58,6 +65,10 @@ class Settings(BaseSettings):
                     object.__setattr__(self, key, [v.strip() for v in value.split(",") if v.strip()])
             else:
                 object.__setattr__(self, key, value)
+
+            if key == "disc_subfolder_patterns":
+                from app.core.audio_reader import invalidate_disc_pattern_cache
+                invalidate_disc_pattern_cache()
         except (ValueError, json.JSONDecodeError):
             pass
 

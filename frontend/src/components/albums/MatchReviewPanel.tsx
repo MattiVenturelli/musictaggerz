@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Tag, SkipForward, RefreshCw, Trash2, Disc3 } from 'lucide-react'
 import type { AlbumDetail, MatchCandidateResponse } from '@/types'
 import { ConfidenceIndicator, ConfirmDialog } from '@/components/common'
@@ -13,6 +14,7 @@ interface Props {
 export function MatchReviewPanel({ album }: Props) {
   const { tagAlbum, retagAlbum, skipAlbum, deleteAlbum, fetchAlbum } = useAlbumStore()
   const addToast = useNotificationStore((s) => s.addToast)
+  const navigate = useNavigate()
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(
     album.match_candidates.find((c) => c.is_selected)?.musicbrainz_release_id || null
   )
@@ -25,6 +27,19 @@ export function MatchReviewPanel({ album }: Props) {
       await action()
       addToast('success', successMsg)
       fetchAlbum(album.id)
+    } catch {
+      addToast('error', 'Action failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    setBusy(true)
+    try {
+      await deleteAlbum(album.id)
+      addToast('success', 'Album removed')
+      navigate('/albums')
     } catch {
       addToast('error', 'Action failed')
     } finally {
@@ -104,7 +119,7 @@ export function MatchReviewPanel({ album }: Props) {
         confirmLabel="Remove"
         onConfirm={() => {
           setConfirmDelete(false)
-          handleAction(() => deleteAlbum(album.id), 'Album removed')
+          handleDelete()
         }}
         onCancel={() => setConfirmDelete(false)}
       />

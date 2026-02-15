@@ -83,5 +83,8 @@ if os.path.isdir(static_dir):
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        """Serve index.html for all non-API routes (SPA client-side routing)."""
+        """Serve static files if they exist, otherwise index.html for SPA routing."""
+        file_path = os.path.join(static_dir, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
         return FileResponse(os.path.join(static_dir, "index.html"))

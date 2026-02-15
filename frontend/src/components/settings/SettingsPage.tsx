@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, type KeyboardEvent } from 'react'
 import {
   Save, Sliders, Globe, Image, Key, X, Plus, GripVertical,
-  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info,
+  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info, Github,
 } from 'lucide-react'
 import { useSettingsStore } from '@/store/useSettingsStore'
 import { useNotificationStore } from '@/store/useNotificationStore'
@@ -33,6 +33,12 @@ const DEFAULTS: Record<string, string> = {
   fanarttv_api_key: '',
   spotify_client_id: '',
   spotify_client_secret: '',
+  disc_subfolder_patterns: JSON.stringify([
+    String.raw`^(?:cd|disc|disk)\s*(\d+)$`,
+    String.raw`^(?:(?:7|10|12)\s*(?:inch\s*)?)?vinyl\s*(\d+)$`,
+    String.raw`^side\s*([A-Da-d\d])$`,
+    String.raw`^cassette\s*(\d+)$`,
+  ]),
 }
 
 const ARTWORK_SOURCE_LABELS: Record<string, string> = {
@@ -158,6 +164,21 @@ export function SettingsPage() {
           <ApiKeysTab draft={draft} updateDraft={updateDraft} />
         )}
       </div>
+
+      {/* About footer */}
+      <div className="flex items-center justify-center gap-2 pt-2 pb-4 text-xs text-text-subtle">
+        <span>MusicTaggerz</span>
+        <span className="text-surface-500">·</span>
+        <a
+          href="https://github.com/MattiVenturelli/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-text-subtle hover:text-text transition-colors"
+        >
+          <Github className="h-3.5 w-3.5" />
+          MattiVenturelli
+        </a>
+      </div>
     </div>
   )
 }
@@ -280,6 +301,16 @@ function GeneralTab({ draft, updateDraft }: TabProps) {
             </span>
           </div>
         </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title="Multi-Disc Detection"
+        description="Regex patterns to identify disc subfolders (e.g. CD1, Disc 2, Vinyl1). Each pattern must have one capture group returning the disc number or letter. Matched folders are merged into a single album."
+      >
+        <RegexListInput
+          value={draft['disc_subfolder_patterns'] || DEFAULTS.disc_subfolder_patterns}
+          onChange={(v) => updateDraft('disc_subfolder_patterns', v)}
+        />
       </SettingsCard>
     </>
   )
@@ -591,6 +622,150 @@ function ChipListInput({
         placeholder={items.length === 0 ? placeholder : ''}
         className="flex-1 min-w-[120px] bg-transparent text-sm text-text placeholder:text-text-subtle focus:outline-none py-1 px-1"
       />
+    </div>
+  )
+}
+
+function parsePatterns(raw: string): string[] {
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.map(String)
+    } catch { /* fall through */ }
+  }
+  return raw.split(',').filter(Boolean)
+}
+
+function serializePatterns(items: string[]): string {
+  return JSON.stringify(items.filter((p) => p.trim()))
+}
+
+function validatePattern(pattern: string): string | null {
+  if (!pattern.trim()) return null
+  try {
+    new RegExp(pattern)
+    return null
+  } catch (e) {
+    return e instanceof Error ? e.message : 'Invalid regex'
+  }
+}
+
+function RegexListInput({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  const items = parsePatterns(value)
+  const [editingNew, setEditingNew] = useState(false)
+  const [newValue, setNewValue] = useState('')
+  const newInputRef = useRef<HTMLInputElement>(null)
+
+  const errors = items.map(validatePattern)
+  const newError = newValue ? validatePattern(newValue) : null
+
+  const updateItem = (index: number, newVal: string) => {
+    const newItems = [...items]
+    newItems[index] = newVal
+    onChange(serializePatterns(newItems))
+  }
+
+  const removeItem = (index: number) => {
+    onChange(serializePatterns(items.filter((_, i) => i !== index)))
+  }
+
+  const commitNew = () => {
+    const trimmed = newValue.trim()
+    if (trimmed) {
+      onChange(serializePatterns([...items, trimmed]))
+    }
+    setNewValue('')
+    setEditingNew(false)
+  }
+
+  const startAdding = () => {
+    setEditingNew(true)
+    setNewValue('')
+    setTimeout(() => newInputRef.current?.focus(), 0)
+  }
+
+  const handleNewKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      commitNew()
+    } else if (e.key === 'Escape') {
+      setNewValue('')
+      setEditingNew(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      {items.map((item, i) => (
+        <div key={i}>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={item}
+              onChange={(e) => updateItem(i, e.target.value)}
+              placeholder="^pattern\s*(\d+)$"
+              className={cn(
+                'flex-1 px-3 py-2 bg-surface-200 border rounded-lg text-sm text-text font-mono placeholder:text-text-subtle focus:outline-none transition-colors',
+                errors[i]
+                  ? 'border-accent-red focus:border-accent-red'
+                  : 'border-surface-400 focus:border-accent-blue',
+              )}
+            />
+            <button
+              onClick={() => removeItem(i)}
+              className="p-1.5 text-text-subtle hover:text-accent-red transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {errors[i] && (
+            <p className="text-xs text-accent-red mt-1 ml-1">{errors[i]}</p>
+          )}
+        </div>
+      ))}
+      {editingNew && (
+        <div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={newInputRef}
+              type="text"
+              value={newValue}
+              onChange={(e) => setNewValue(e.target.value)}
+              onKeyDown={handleNewKeyDown}
+              onBlur={commitNew}
+              placeholder="^pattern\s*(\d+)$"
+              className={cn(
+                'flex-1 px-3 py-2 bg-surface-200 border rounded-lg text-sm text-text font-mono placeholder:text-text-subtle focus:outline-none transition-colors',
+                newError
+                  ? 'border-accent-red focus:border-accent-red'
+                  : 'border-surface-400 focus:border-accent-blue',
+              )}
+            />
+            <button
+              onClick={() => { setNewValue(''); setEditingNew(false) }}
+              className="p-1.5 text-text-subtle hover:text-accent-red transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {newError && (
+            <p className="text-xs text-accent-red mt-1 ml-1">{newError}</p>
+          )}
+        </div>
+      )}
+      <button
+        onClick={startAdding}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-accent-blue hover:bg-accent-blue/10 rounded-lg transition-colors"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Add pattern
+      </button>
     </div>
   )
 }

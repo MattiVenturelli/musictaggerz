@@ -3,7 +3,10 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
-from app.core.audio_reader import scan_album_folder, AUDIO_EXTENSIONS, AlbumInfo
+from app.core.audio_reader import (
+    scan_album_folder, scan_multi_disc_album, find_disc_subfolders,
+    has_audio_files, is_disc_subfolder, AUDIO_EXTENSIONS, AlbumInfo,
+)
 from app.models import Album, Track, ActivityLog
 from app.database import SessionLocal
 from app.config import settings
@@ -32,13 +35,8 @@ def scan_directory(path: str = None, force: bool = False) -> List[int]:
             if entry.startswith("."):
                 continue
 
-            has_audio = any(
-                os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS
-                for f in os.listdir(folder_path)
-                if os.path.isfile(os.path.join(folder_path, f))
-            )
-
-            if has_audio:
+            if has_audio_files(folder_path):
+                # Level 1: direct audio files → single album
                 existing = db.query(Album).filter(Album.path == folder_path).first()
                 is_new = existing is None or force
                 album_id = _scan_album_folder(db, folder_path, force=force)
@@ -47,25 +45,44 @@ def scan_directory(path: str = None, force: bool = False) -> List[int]:
                     if is_new:
                         new_album_ids.append(album_id)
             else:
-                for sub_entry in sorted(os.listdir(folder_path)):
-                    sub_path = os.path.join(folder_path, sub_entry)
-                    if not os.path.isdir(sub_path):
-                        continue
-                    if sub_entry.startswith("."):
-                        continue
-                    has_sub_audio = any(
-                        os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS
-                        for f in os.listdir(sub_path)
-                        if os.path.isfile(os.path.join(sub_path, f))
-                    )
-                    if has_sub_audio:
-                        existing = db.query(Album).filter(Album.path == sub_path).first()
-                        is_new = existing is None or force
-                        album_id = _scan_album_folder(db, sub_path, force=force)
-                        if album_id:
-                            album_ids.append(album_id)
-                            if is_new:
-                                new_album_ids.append(album_id)
+                # Check if this folder has disc subfolders (e.g. Album/CD1/)
+                disc_subs = find_disc_subfolders(folder_path)
+                if disc_subs:
+                    existing = db.query(Album).filter(Album.path == folder_path).first()
+                    is_new = existing is None or force
+                    album_id = _scan_multi_disc_folder(db, folder_path, disc_subs, force=force)
+                    if album_id:
+                        album_ids.append(album_id)
+                        if is_new:
+                            new_album_ids.append(album_id)
+                else:
+                    # Level 2: Artist/Album structure
+                    for sub_entry in sorted(os.listdir(folder_path)):
+                        sub_path = os.path.join(folder_path, sub_entry)
+                        if not os.path.isdir(sub_path):
+                            continue
+                        if sub_entry.startswith("."):
+                            continue
+
+                        if has_audio_files(sub_path):
+                            existing = db.query(Album).filter(Album.path == sub_path).first()
+                            is_new = existing is None or force
+                            album_id = _scan_album_folder(db, sub_path, force=force)
+                            if album_id:
+                                album_ids.append(album_id)
+                                if is_new:
+                                    new_album_ids.append(album_id)
+                        else:
+                            # Level 3: Artist/Album/CD1/ structure
+                            disc_subs_2 = find_disc_subfolders(sub_path)
+                            if disc_subs_2:
+                                existing = db.query(Album).filter(Album.path == sub_path).first()
+                                is_new = existing is None or force
+                                album_id = _scan_multi_disc_folder(db, sub_path, disc_subs_2, force=force)
+                                if album_id:
+                                    album_ids.append(album_id)
+                                    if is_new:
+                                        new_album_ids.append(album_id)
 
         log.info(f"Scan complete. Found {len(album_ids)} albums ({len(new_album_ids)} new).")
         notifications.send_scan_update(len(album_ids), "Scan complete")
@@ -149,9 +166,87 @@ def _scan_album_folder(db: Session, folder_path: str, force: bool = False) -> in
     return album.id
 
 
+def _scan_multi_disc_folder(db: Session, parent_path: str, disc_subs: dict[int, str], force: bool = False) -> int | None:
+    """Scan a multi-disc album and create a single Album record."""
+    existing = db.query(Album).filter(Album.path == parent_path).first()
+    if existing:
+        if not force:
+            log.debug(f"Multi-disc album already in database: {parent_path}")
+            return existing.id
+        log.info(f"Force rescan multi-disc: {parent_path}")
+        db.query(Track).filter(Track.album_id == existing.id).delete()
+        db.delete(existing)
+        db.flush()
+
+    # Cleanup: remove any old Album records that pointed to individual disc subfolders
+    for disc_path in disc_subs.values():
+        old = db.query(Album).filter(Album.path == disc_path).first()
+        if old:
+            log.info(f"Removing old per-disc record: {disc_path}")
+            db.query(Track).filter(Track.album_id == old.id).delete()
+            db.delete(old)
+    db.flush()
+
+    album_info = scan_multi_disc_album(parent_path, disc_subs)
+    if not album_info:
+        return None
+
+    log.info(f"New multi-disc album: {album_info.artist} - {album_info.album} "
+             f"({album_info.track_count} tracks, {album_info.disc_count} discs)")
+
+    album = Album(
+        path=parent_path,
+        artist=album_info.artist,
+        album=album_info.album,
+        year=album_info.year,
+        status="pending",
+        track_count=album_info.track_count,
+    )
+    db.add(album)
+    db.flush()
+
+    for track_info in album_info.tracks:
+        track = Track(
+            album_id=album.id,
+            path=track_info.path,
+            track_number=track_info.track_number,
+            disc_number=track_info.disc_number or 1,
+            title=track_info.title,
+            artist=track_info.artist,
+            duration=track_info.duration,
+            musicbrainz_recording_id=track_info.musicbrainz_recording_id,
+            status="pending",
+        )
+        db.add(track)
+        if track_info.musicbrainz_release_id and not album.musicbrainz_release_id:
+            album.musicbrainz_release_id = track_info.musicbrainz_release_id
+
+    db.add(ActivityLog(
+        album_id=album.id,
+        action="scanned",
+        details=f"{album_info.track_count} tracks, {album_info.disc_count} discs",
+    ))
+
+    db.commit()
+    return album.id
+
+
 def scan_single_folder(folder_path: str) -> int | None:
     db = SessionLocal()
     try:
+        # If this folder is a disc subfolder, scan the parent as multi-disc
+        folder_name = os.path.basename(folder_path)
+        if is_disc_subfolder(folder_name):
+            parent_path = os.path.dirname(folder_path)
+            disc_subs = find_disc_subfolders(parent_path)
+            if disc_subs:
+                return _scan_multi_disc_folder(db, parent_path, disc_subs)
+
+        # Check if the folder itself has disc subfolders
+        disc_subs = find_disc_subfolders(folder_path)
+        if disc_subs:
+            return _scan_multi_disc_folder(db, folder_path, disc_subs)
+
         album_id = _scan_album_folder(db, folder_path)
         return album_id
     finally:

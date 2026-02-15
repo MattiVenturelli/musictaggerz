@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional, List
 
@@ -13,6 +14,32 @@ from mutagen.id3 import ID3
 from app.utils.logger import log
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wma"}
+
+_disc_pattern_cache: list[re.Pattern] | None = None
+
+
+def _compile_disc_patterns() -> list[re.Pattern]:
+    """Compile disc subfolder patterns from settings, with caching."""
+    global _disc_pattern_cache
+    if _disc_pattern_cache is not None:
+        return _disc_pattern_cache
+    from app.config import settings
+    compiled = []
+    for p in settings.disc_subfolder_patterns:
+        if not p or not p.strip():
+            continue
+        try:
+            compiled.append(re.compile(p, re.IGNORECASE))
+        except re.error as e:
+            log.warning(f"Invalid disc subfolder pattern {p!r}: {e}")
+    _disc_pattern_cache = compiled
+    return _disc_pattern_cache
+
+
+def invalidate_disc_pattern_cache() -> None:
+    """Reset the compiled disc pattern cache (call when settings change)."""
+    global _disc_pattern_cache
+    _disc_pattern_cache = None
 
 
 @dataclass
@@ -44,6 +71,20 @@ class AlbumInfo:
     @property
     def track_count(self) -> int:
         return len(self.tracks)
+
+    @property
+    def disc_count(self) -> int:
+        if not self.tracks:
+            return 1
+        return len(set(t.disc_number or 1 for t in self.tracks))
+
+    @property
+    def disc_track_counts(self) -> dict[int, int]:
+        counts: dict[int, int] = {}
+        for t in self.tracks:
+            disc = t.disc_number or 1
+            counts[disc] = counts.get(disc, 0) + 1
+        return counts
 
 
 def _safe_int(value) -> Optional[int]:
@@ -250,3 +291,102 @@ def _most_common(values: list):
     for v in values:
         counts[v] = counts.get(v, 0) + 1
     return max(counts, key=counts.get)
+
+
+def has_audio_files(path: str) -> bool:
+    """Check if a directory directly contains audio files."""
+    try:
+        return any(
+            os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS
+            for f in os.listdir(path)
+            if os.path.isfile(os.path.join(path, f))
+        )
+    except OSError:
+        return False
+
+
+def is_disc_subfolder(name: str) -> Optional[int]:
+    """Check if a folder name matches a disc pattern.
+
+    Patterns are configurable via settings.disc_subfolder_patterns.
+    Each pattern must have one capture group that returns a disc number or letter.
+    Returns the disc number (int) or None.
+    """
+    name = name.strip()
+    for pattern in _compile_disc_patterns():
+        m = pattern.match(name)
+        if not m:
+            continue
+        # Find the first non-None capture group
+        for g in range(1, len(m.groups()) + 1):
+            val = m.group(g)
+            if val is not None:
+                if val.isdigit():
+                    return int(val)
+                # Letter → number (A=1, B=2, ...)
+                if len(val) == 1 and val.isalpha():
+                    return ord(val.upper()) - ord('A') + 1
+                return None
+    return None
+
+
+def find_disc_subfolders(folder_path: str) -> dict[int, str]:
+    """Find disc subfolders within a folder.
+
+    Returns {disc_number: subfolder_path} sorted by disc number,
+    only for subfolders that contain audio files.
+    """
+    if not os.path.isdir(folder_path):
+        return {}
+
+    result: dict[int, str] = {}
+    for entry in os.listdir(folder_path):
+        sub_path = os.path.join(folder_path, entry)
+        if not os.path.isdir(sub_path):
+            continue
+        disc_num = is_disc_subfolder(entry)
+        if disc_num is not None and has_audio_files(sub_path):
+            result[disc_num] = sub_path
+
+    return dict(sorted(result.items()))
+
+
+def scan_multi_disc_album(folder_path: str, disc_folders: dict[int, str]) -> Optional[AlbumInfo]:
+    """Scan a multi-disc album spread across disc subfolders.
+
+    Args:
+        folder_path: Parent album folder (becomes AlbumInfo.path)
+        disc_folders: {disc_number: subfolder_path} from find_disc_subfolders
+
+    Returns AlbumInfo with all tracks merged, sorted by (disc_number, track_number).
+    """
+    all_tracks: List[TrackInfo] = []
+
+    for disc_num, disc_path in sorted(disc_folders.items()):
+        for filename in sorted(os.listdir(disc_path)):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in AUDIO_EXTENSIONS:
+                continue
+            filepath = os.path.join(disc_path, filename)
+            if not os.path.isfile(filepath):
+                continue
+            track = read_track(filepath)
+            if track:
+                if not track.disc_number:
+                    track.disc_number = disc_num
+                all_tracks.append(track)
+
+    if not all_tracks:
+        return None
+
+    artist = _most_common([t.album_artist or t.artist for t in all_tracks if t.album_artist or t.artist])
+    album = _most_common([t.album for t in all_tracks if t.album])
+    year = _most_common([t.year for t in all_tracks if t.year])
+
+    return AlbumInfo(
+        path=folder_path,
+        artist=artist,
+        album=album,
+        year=year,
+        tracks=sorted(all_tracks, key=lambda t: (t.disc_number or 1, t.track_number or 0)),
+    )

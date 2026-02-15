@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>MusicTaggerz</Name>
+  <Repository>ghcr.io/mattiventurelli/musictaggerz</Repository>
+  <Registry>https://github.com/MattiVenturelli/musictaggerz/pkgs/container/musictaggerz</Registry>
+  <Branch>
+    <Tag>latest</Tag>
+    <TagDescription>Latest stable release</TagDescription>
+  </Branch>
+  <Network>bridge</Network>
+  <WebUI>http://[IP]:[PORT:8765]</WebUI>
+  <Icon>https://raw.githubusercontent.com/MattiVenturelli/musictaggerz/main/unraid/musictaggerz-icon.png</Icon>
+  <Project>https://github.com/MattiVenturelli/musictaggerz</Project>
+  <Support>https://github.com/MattiVenturelli/musictaggerz/issues</Support>
+  <Overview>MusicTaggerz is an automatic music tagger with MusicBrainz integration. It scans your music directory, matches albums against MusicBrainz, scores candidates (0-100), and auto-tags high-confidence matches while queuing uncertain ones for manual review via a modern web UI.</Overview>
+  <Category>MediaApp:Music Tools:</Category>
+  <Requires/>
+  <ExtraSearchTerms>music tagger musicbrainz auto tag metadata</ExtraSearchTerms>
+  <DonateText/>
+  <DonateLink/>
+  <DonateImg/>
+  <Description>MusicTaggerz is an automatic music tagger with MusicBrainz integration. It scans your music directory, matches albums against MusicBrainz, scores candidates (0-100), and auto-tags high-confidence matches while queuing uncertain ones for manual review via a modern web UI.</Description>
+  <Config Name="WebUI Port" Target="8765" Default="8765" Mode="tcp" Description="Port for the web interface" Type="Port" Display="always" Required="true" Mask="false">8765</Config>
+  <Config Name="Music Library" Target="/music" Default="/mnt/user/Music" Mode="rw" Description="Path to your music library" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Music</Config>
+  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/musictaggerz" Mode="rw" Description="Path for database and configuration" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/musictaggerz</Config>
+</Container>
