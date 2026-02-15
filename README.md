@@ -18,6 +18,35 @@
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="100%"/>
+</p>
+<p align="center"><em>Dashboard — overview of your library with status breakdown and recent activity</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/albums.png" alt="Albums" width="100%"/>
+</p>
+<p align="center"><em>Albums — browse your library with cover art, search and status filters</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/album-detail.png" alt="Album Detail" width="100%"/>
+</p>
+<p align="center"><em>Album Detail — review match candidates with confidence scores, tag or skip</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/tracks-artwork.png" alt="Tracks & Artwork" width="100%"/>
+</p>
+<p align="center"><em>Tracks & Artwork — track list with cover art chooser from multiple sources</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Settings" width="100%"/>
+</p>
+<p align="center"><em>Settings — thresholds, file watcher, multi-disc patterns, artwork sources, API keys</em></p>
+
+---
+
 ## Features
 
 | | |
