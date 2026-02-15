@@ -5,6 +5,10 @@ from typing import List, Optional
 
 from app.core.audio_reader import AlbumInfo
 from app.core.musicbrainz_client import MBRelease, search_releases, get_release_details
+from app.core.fingerprint import (
+    FingerprintMatch, fingerprint_album, aggregate_release_candidates,
+    compute_fingerprint_score,
+)
 from app.config import settings
 from app.utils.logger import log
 
@@ -19,6 +23,7 @@ class MatchScore:
     media_score: float = 0.0
     country_score: float = 0.0
     year_score: float = 0.0
+    fingerprint_score: float = 0.0
     penalty: float = 0.0
     details: List[str] = field(default_factory=list)
 
@@ -210,7 +215,11 @@ def _calculate_penalties(local: AlbumInfo, release: MBRelease) -> tuple[float, l
     return penalty, details
 
 
-def score_release(local: AlbumInfo, release: MBRelease) -> MatchScore:
+def score_release(
+    local: AlbumInfo,
+    release: MBRelease,
+    fingerprint_matches: Optional[List[FingerprintMatch]] = None,
+) -> MatchScore:
     """Score a single release against local album data."""
     match = MatchScore(release=release)
 
@@ -238,6 +247,17 @@ def score_release(local: AlbumInfo, release: MBRelease) -> MatchScore:
     match.year_score = year_score
     match.details.extend(year_details)
 
+    # Fingerprint bonus (max 15 points)
+    if fingerprint_matches:
+        for fp_match in fingerprint_matches:
+            if fp_match.release_id == release.release_id:
+                match.fingerprint_score = compute_fingerprint_score(fp_match, local.track_count)
+                match.details.append(
+                    f"Fingerprint: {fp_match.matched_tracks}/{fp_match.total_tracks} tracks, "
+                    f"avg score {fp_match.avg_score:.0%} ({match.fingerprint_score:.1f}/15)"
+                )
+                break
+
     penalty, penalty_details = _calculate_penalties(local, release)
     match.penalty = penalty
     match.details.extend(penalty_details)
@@ -249,6 +269,7 @@ def score_release(local: AlbumInfo, release: MBRelease) -> MatchScore:
         + match.media_score
         + match.country_score
         + match.year_score
+        + match.fingerprint_score
         - match.penalty
     )
     # Clamp to 0-100
@@ -349,6 +370,39 @@ def find_matches(local: AlbumInfo, limit: int = 10) -> List[MatchScore]:
 
     # Return top results
     return detailed_scored[:limit]
+
+
+def find_matches_by_fingerprint(
+    local: AlbumInfo,
+    api_key: str,
+    limit: int = 10,
+) -> List[MatchScore]:
+    """Fallback path: find matches using audio fingerprinting when text search fails.
+
+    Fingerprints tracks → aggregates release candidates → fetches MB details → scores.
+    """
+    log.info(f"Fingerprint fallback for {local.path}")
+
+    fingerprints = fingerprint_album(api_key, local.tracks)
+    if not fingerprints:
+        log.warning("Fingerprint fallback: no fingerprints generated")
+        return []
+
+    fp_matches = aggregate_release_candidates(fingerprints)
+    if not fp_matches:
+        log.warning("Fingerprint fallback: no release candidates from AcoustID")
+        return []
+
+    log.info(f"Fingerprint found {len(fp_matches)} candidate releases, fetching details...")
+
+    scored = []
+    for fp_match in fp_matches[:5]:  # fetch details for top 5
+        release = get_release_details(fp_match.release_id)
+        if release:
+            scored.append(score_release(local, release, fingerprint_matches=fp_matches))
+
+    scored.sort(key=lambda m: m.total_score, reverse=True)
+    return scored[:limit]
 
 
 def decide_action(score: float) -> str:

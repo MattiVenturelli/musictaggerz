@@ -125,3 +125,23 @@ class ActivityLogResponse(BaseModel):
 
 
 StatsResponse.model_rebuild()
+
+
+class ArtworkOptionResponse(BaseModel):
+    source: str
+    thumbnail_url: str
+    full_url: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    label: str
+
+
+class ArtworkDiscoveryResponse(BaseModel):
+    album_id: int
+    options: List[ArtworkOptionResponse]
+
+
+class ApplyArtworkRequest(BaseModel):
+    source: str
+    full_url: str
+    file: Optional[str] = None

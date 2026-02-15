@@ -28,6 +28,8 @@ const DEFAULTS: Record<string, string> = {
   artwork_min_size: '500',
   artwork_max_size: '1400',
   artwork_sources: 'coverart,filesystem,fanarttv,itunes,spotify',
+  acoustid_api_key: '',
+  fingerprint_enabled: 'false',
   fanarttv_api_key: '',
   spotify_client_id: '',
   spotify_client_secret: '',
@@ -287,6 +289,33 @@ function MatchingTab({ draft, updateDraft }: TabProps) {
   return (
     <>
       <SettingsCard
+        title="Audio Fingerprinting"
+        description="Use AcoustID audio fingerprinting to improve matching when metadata is poor or missing."
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-text">
+              {draft['fingerprint_enabled'] === 'true' ? 'Enabled' : 'Disabled'}
+            </p>
+            <p className="text-xs text-text-subtle mt-0.5">
+              {draft['fingerprint_enabled'] === 'true'
+                ? 'Fingerprinting is used as a supplementary/fallback matching method'
+                : 'Only text-based matching is used'}
+            </p>
+            {draft['fingerprint_enabled'] === 'true' && !draft['acoustid_api_key'] && (
+              <p className="text-xs text-accent-yellow mt-1">
+                Requires an AcoustID API key (configure in API Keys tab)
+              </p>
+            )}
+          </div>
+          <ToggleSwitch
+            checked={draft['fingerprint_enabled'] === 'true'}
+            onChange={(v) => updateDraft('fingerprint_enabled', v ? 'true' : 'false')}
+          />
+        </div>
+      </SettingsCard>
+
+      <SettingsCard
         title="Preferred Countries"
         description="Release countries to prefer when multiple versions of an album exist. Higher priority countries get better match scores."
       >
@@ -409,6 +438,14 @@ function ApiKeysTab({ draft, updateDraft }: TabProps) {
         <Info className="h-4 w-4 mt-0.5 shrink-0" />
         <p>API keys are optional. Without them, only iTunes and Cover Art Archive will be used for artwork (both free, no key needed).</p>
       </div>
+
+      <ApiKeyCard
+        title="AcoustID"
+        description="Audio fingerprinting for identifying tracks when metadata is missing or incorrect."
+        signupUrl="https://acoustid.org/new-application"
+        value={draft['acoustid_api_key'] || ''}
+        onChange={(v) => updateDraft('acoustid_api_key', v)}
+      />
 
       <ApiKeyCard
         title="fanart.tv"

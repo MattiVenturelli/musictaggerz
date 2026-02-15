@@ -119,6 +119,26 @@ export interface WSScanUpdate {
 
 export type WSMessage = WSAlbumUpdate | WSProgress | WSNotification | WSScanUpdate
 
+export interface ArtworkOption {
+  source: string
+  thumbnail_url: string
+  full_url: string
+  width: number | null
+  height: number | null
+  label: string
+}
+
+export interface ArtworkDiscoveryResponse {
+  album_id: number
+  options: ArtworkOption[]
+}
+
+export interface ApplyArtworkRequest {
+  source: string
+  full_url: string
+  file?: string
+}
+
 export interface AlbumFilters {
   status?: AlbumStatus | ''
   search?: string

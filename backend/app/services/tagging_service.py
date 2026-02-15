@@ -4,8 +4,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.audio_reader import scan_album_folder
-from app.core.matcher import find_matches, decide_action, MatchScore
+from app.core.matcher import find_matches, find_matches_by_fingerprint, decide_action, score_release, MatchScore
 from app.core.musicbrainz_client import MBRelease, get_release_details
+from app.core.fingerprint import fingerprint_album, aggregate_release_candidates
 from app.core.tagger import write_tags, TagData
 from app.core.artwork_fetcher import fetch_artwork, save_artwork_to_folder
 from app.models import Album, Track, MatchCandidate, ActivityLog
@@ -71,6 +72,29 @@ def process_album(album_id: int, release_id: Optional[str] = None, user_initiate
         else:
             # Automatic matching
             matches = find_matches(album_info, limit=10)
+
+            acoustid_key = settings.acoustid_api_key
+            fp_enabled = settings.fingerprint_enabled and bool(acoustid_key)
+            best_text = matches[0].total_score if matches else 0
+
+            if fp_enabled and not matches:
+                # FALLBACK: text search failed, fingerprint is primary discovery
+                _progress(album_id, 0.15, "Text search failed, fingerprinting tracks...")
+                matches = find_matches_by_fingerprint(album_info, acoustid_key, limit=10)
+            elif fp_enabled and best_text < settings.confidence_auto_threshold:
+                # SUPPLEMENTARY: refine scores with fingerprint data
+                _progress(album_id, 0.15, "Fingerprinting tracks for better matching...")
+                fp_data = fingerprint_album(acoustid_key, album_info.tracks)
+                if fp_data:
+                    fp_matches = aggregate_release_candidates(fp_data)
+                    if fp_matches:
+                        matches = [
+                            score_release(album_info, m.release, fingerprint_matches=fp_matches)
+                            for m in matches
+                        ]
+                        matches.sort(key=lambda m: m.total_score, reverse=True)
+            # else: score already high enough or fingerprinting disabled, skip
+
             if not matches:
                 album.status = "failed"
                 album.error_message = "No MusicBrainz matches found"
@@ -157,6 +181,7 @@ def process_album(album_id: int, release_id: Optional[str] = None, user_initiate
         album.album = selected_release.title
         album.year = selected_release.original_year or selected_release.year
         album.musicbrainz_release_id = selected_release.release_id
+        album.musicbrainz_release_group_id = selected_release.release_group_id
         album.status = "tagged"
         album.error_message = None
 

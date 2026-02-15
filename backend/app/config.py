@@ -20,6 +20,9 @@ class Settings(BaseSettings):
 
     watch_stabilization_delay: int = 30
 
+    acoustid_api_key: str = ""
+    fingerprint_enabled: bool = False
+
     fanarttv_api_key: str = ""
     spotify_client_id: str = ""
     spotify_client_secret: str = ""

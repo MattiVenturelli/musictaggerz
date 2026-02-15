@@ -22,6 +22,7 @@ class Album(Base):
     status = Column(String, nullable=False, default="pending")
     match_confidence = Column(Float)
     musicbrainz_release_id = Column(String)
+    musicbrainz_release_group_id = Column(String)
     cover_path = Column(String)
     cover_url = Column(String)
     track_count = Column(Integer)

@@ -11,10 +11,17 @@ from app.schemas import (
     AlbumSummary, AlbumDetail, AlbumListResponse,
     TagRequest, ScanRequest, TrackResponse, MatchCandidateResponse,
     BatchActionRequest,
+    ArtworkOptionResponse, ArtworkDiscoveryResponse, ApplyArtworkRequest,
 )
 from app.core.audio_reader import read_track
+from app.core.artwork_discovery import (
+    discover_caa, discover_itunes, discover_fanarttv, discover_filesystem,
+)
+from app.core.artwork_fetcher import _download_image, save_artwork_to_folder
+from app.core.tagger import write_tags, TagData
 from app.services.album_scanner import scan_directory
 from app.services.queue_manager import queue_manager
+from app.utils.logger import log
 
 router = APIRouter()
 
@@ -62,6 +69,117 @@ def list_albums(
     )
 
 
+@router.get("/{album_id}/artwork-options", response_model=ArtworkDiscoveryResponse)
+def get_artwork_options(album_id: int, db: Session = Depends(get_db)):
+    """Discover available artwork from all sources (thumbnails only, no download)."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    options: list[ArtworkOptionResponse] = []
+
+    # Filesystem
+    if album.path:
+        for opt in discover_filesystem(album.path, album.id):
+            options.append(ArtworkOptionResponse(
+                source=opt.source, thumbnail_url=opt.thumbnail_url,
+                full_url=opt.full_url, width=opt.width, height=opt.height,
+                label=opt.label,
+            ))
+
+    # CAA for the current release
+    if album.musicbrainz_release_id:
+        for opt in discover_caa(album.musicbrainz_release_id):
+            options.append(ArtworkOptionResponse(
+                source=opt.source, thumbnail_url=opt.thumbnail_url,
+                full_url=opt.full_url, width=opt.width, height=opt.height,
+                label=opt.label,
+            ))
+
+    # CAA for all match candidates (different releases)
+    candidate_ids = {
+        c.musicbrainz_release_id
+        for c in db.query(MatchCandidate).filter(MatchCandidate.album_id == album_id).all()
+        if c.musicbrainz_release_id != album.musicbrainz_release_id
+    }
+    for rid in candidate_ids:
+        for opt in discover_caa(rid):
+            opt.label = f"{opt.label} (candidate)"
+            options.append(ArtworkOptionResponse(
+                source=opt.source, thumbnail_url=opt.thumbnail_url,
+                full_url=opt.full_url, width=opt.width, height=opt.height,
+                label=opt.label,
+            ))
+
+    # iTunes
+    if album.artist or album.album:
+        for opt in discover_itunes(album.artist or "", album.album or ""):
+            options.append(ArtworkOptionResponse(
+                source=opt.source, thumbnail_url=opt.thumbnail_url,
+                full_url=opt.full_url, width=opt.width, height=opt.height,
+                label=opt.label,
+            ))
+
+    # fanart.tv
+    if album.musicbrainz_release_group_id:
+        for opt in discover_fanarttv(album.musicbrainz_release_group_id):
+            options.append(ArtworkOptionResponse(
+                source=opt.source, thumbnail_url=opt.thumbnail_url,
+                full_url=opt.full_url, width=opt.width, height=opt.height,
+                label=opt.label,
+            ))
+
+    return ArtworkDiscoveryResponse(album_id=album_id, options=options)
+
+
+@router.post("/{album_id}/artwork")
+def apply_artwork(album_id: int, request: ApplyArtworkRequest, db: Session = Depends(get_db)):
+    """Download selected artwork, save to folder, and embed in audio files."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    # Get image data
+    if request.source == "filesystem":
+        # Read from local file
+        filename = request.file or os.path.basename(request.full_url.split("file=")[-1])
+        filename = os.path.basename(filename)  # sanitize
+        filepath = os.path.join(album.path, filename)
+        if not os.path.isfile(filepath):
+            raise HTTPException(status_code=404, detail="Local file not found")
+        with open(filepath, "rb") as f:
+            image_data = f.read()
+        mime = "image/png" if filepath.lower().endswith(".png") else "image/jpeg"
+    else:
+        # Download from external URL
+        image_data = _download_image(request.full_url)
+        if not image_data:
+            raise HTTPException(status_code=502, detail="Failed to download artwork")
+        mime = "image/png" if image_data[:4] == b'\x89PNG' else "image/jpeg"
+
+    # Save to album folder
+    saved_path = save_artwork_to_folder(album.path, image_data, mime)
+    if saved_path:
+        album.cover_path = saved_path
+
+    # Embed in all audio files
+    tracks = db.query(Track).filter(Track.album_id == album_id).all()
+    embedded = 0
+    for track in tracks:
+        tag_data = TagData(cover_data=image_data, cover_mime=mime)
+        if write_tags(track.path, tag_data):
+            embedded += 1
+
+    db.add(ActivityLog(
+        album_id=album_id, action="artwork_applied",
+        details=f"Source: {request.source}, embedded in {embedded}/{len(tracks)} tracks",
+    ))
+    db.commit()
+
+    log.info(f"Artwork applied to album {album_id}: source={request.source}, embedded={embedded}/{len(tracks)}")
+    return {"message": "Artwork applied", "album_id": album_id, "embedded": embedded}
+
+
 @router.get("/{album_id}/tracks/{track_id}/tags")
 def get_track_tags(album_id: int, track_id: int, db: Session = Depends(get_db)):
     """Read current metadata tags directly from the audio file."""
@@ -100,11 +218,23 @@ def get_track_tags(album_id: int, track_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{album_id}/cover")
-def get_album_cover(album_id: int, db: Session = Depends(get_db)):
-    """Serve album cover art image from filesystem."""
+def get_album_cover(album_id: int, file: Optional[str] = None, db: Session = Depends(get_db)):
+    """Serve album cover art image from filesystem.
+
+    If `file` is provided, serve that specific image file from the album folder.
+    """
     album = db.query(Album).filter(Album.id == album_id).first()
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
+
+    # Serve specific file if requested (used by filesystem artwork thumbnails)
+    if file:
+        safe_name = os.path.basename(file)
+        if album.path:
+            filepath = os.path.join(album.path, safe_name)
+            if os.path.isfile(filepath):
+                return FileResponse(filepath, media_type=_guess_image_type(filepath))
+        raise HTTPException(status_code=404, detail="File not found")
 
     # Try the stored cover_path first
     if album.cover_path and os.path.isfile(album.cover_path):

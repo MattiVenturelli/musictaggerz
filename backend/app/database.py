@@ -35,7 +35,20 @@ class Base(DeclarativeBase):
 def init_db():
     from app.models import Album, Track, MatchCandidate, Setting, ActivityLog  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
     _seed_default_settings()
+
+
+def _migrate_add_columns():
+    """Add columns that were introduced after initial schema creation."""
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        # Check existing columns in albums table
+        result = conn.execute(text("PRAGMA table_info(albums)"))
+        existing = {row[1] for row in result}
+        if "musicbrainz_release_group_id" not in existing:
+            conn.execute(text("ALTER TABLE albums ADD COLUMN musicbrainz_release_group_id TEXT"))
+            conn.commit()
 
 
 def _seed_default_settings():
@@ -57,6 +70,10 @@ def _seed_default_settings():
                     description="Maximum artwork dimension in pixels"),
             Setting(key="watch_stabilization_delay", value="30", value_type="int",
                     description="Seconds to wait for file copy completion"),
+            Setting(key="acoustid_api_key", value="", value_type="string",
+                    description="AcoustID API key for audio fingerprinting"),
+            Setting(key="fingerprint_enabled", value="false", value_type="bool",
+                    description="Enable audio fingerprint matching via AcoustID"),
             Setting(key="fanarttv_api_key", value="", value_type="string",
                     description="fanart.tv API key"),
             Setting(key="spotify_client_id", value="", value_type="string",

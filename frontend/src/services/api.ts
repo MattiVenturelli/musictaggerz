@@ -6,6 +6,8 @@ import type {
   SettingResponse,
   ActivityLogResponse,
   AlbumFilters,
+  ArtworkDiscoveryResponse,
+  ApplyArtworkRequest,
 } from '@/types'
 
 const api = axios.create({
@@ -105,6 +107,16 @@ export interface TrackTags {
 export async function fetchTrackTags(albumId: number, trackId: number): Promise<TrackTags> {
   const { data } = await api.get<TrackTags>(`/albums/${albumId}/tracks/${trackId}/tags`)
   return data
+}
+
+// Artwork discovery & selection
+export async function fetchArtworkOptions(albumId: number): Promise<ArtworkDiscoveryResponse> {
+  const { data } = await api.get<ArtworkDiscoveryResponse>(`/albums/${albumId}/artwork-options`)
+  return data
+}
+
+export async function applyArtwork(albumId: number, request: ApplyArtworkRequest): Promise<void> {
+  await api.post(`/albums/${albumId}/artwork`, request)
 }
 
 // Cover art URL helper

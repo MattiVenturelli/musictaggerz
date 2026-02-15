@@ -7,6 +7,7 @@ import { getAlbumCoverUrl } from '@/services/api'
 import { TrackList } from './TrackList'
 import { MatchReviewPanel } from './MatchReviewPanel'
 import { ProgressPanel } from './ProgressPanel'
+import { ArtworkChooser } from './ArtworkChooser'
 
 export function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -103,6 +104,12 @@ export function AlbumDetailPage() {
       <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">
         <h2 className="text-sm font-medium text-text-muted mb-4">Actions & Matching</h2>
         <MatchReviewPanel album={album} />
+      </div>
+
+      {/* Artwork chooser */}
+      <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">
+        <h2 className="text-sm font-medium text-text-muted mb-4">Cover Art</h2>
+        <ArtworkChooser album={album} />
       </div>
 
       {/* Track list */}
