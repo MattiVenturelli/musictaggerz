@@ -9,6 +9,69 @@ from app.utils.logger import log
 # Initialize musicbrainzngs
 musicbrainzngs.set_useragent("MusicTaggerz", "1.0.0", "https://github.com/musictaggerz")
 
+# Known genre names for folksonomy tag fallback (lowercase).
+# Used to filter user-submitted tags like "seen live" or "my favorites".
+_KNOWN_GENRES: set[str] = {
+    # broad
+    "rock", "pop", "electronic", "hip hop", "jazz", "classical", "metal",
+    "punk", "folk", "country", "blues", "soul", "funk", "reggae", "latin",
+    "r&b", "gospel", "disco", "ska", "world",
+    # rock
+    "alternative rock", "indie rock", "hard rock", "progressive rock",
+    "psychedelic rock", "art rock", "garage rock", "surf rock", "glam rock",
+    "soft rock", "southern rock", "stoner rock", "krautrock", "math rock",
+    "post-rock", "noise rock", "space rock", "blues rock", "folk rock",
+    "country rock", "jazz rock", "punk rock",
+    # metal
+    "heavy metal", "death metal", "black metal", "thrash metal", "doom metal",
+    "power metal", "symphonic metal", "progressive metal", "gothic metal",
+    "nu metal", "sludge metal", "post-metal", "metalcore", "deathcore",
+    "grindcore", "speed metal", "folk metal", "industrial metal",
+    # punk
+    "hardcore punk", "post-punk", "pop punk", "anarcho-punk", "crust punk",
+    "melodic hardcore", "emo", "screamo", "grunge", "riot grrrl",
+    # electronic
+    "techno", "house", "trance", "ambient", "drum and bass", "dubstep",
+    "idm", "industrial", "synthpop", "new wave", "darkwave", "ebm",
+    "trip hop", "downtempo", "breakbeat", "electro", "uk garage",
+    "deep house", "tech house", "minimal techno", "acid house",
+    "progressive house", "progressive trance", "psytrance", "hardcore techno",
+    "gabber", "jungle", "liquid funk", "neurofunk", "future bass",
+    "chillwave", "vaporwave", "synthwave", "retrowave", "lo-fi",
+    "glitch", "noise", "dark ambient", "drone",
+    # hip hop
+    "rap", "trap", "conscious hip hop", "gangsta rap", "boom bap",
+    "lo-fi hip hop", "cloud rap", "grime", "uk hip hop", "abstract hip hop",
+    # jazz
+    "bebop", "cool jazz", "free jazz", "fusion", "smooth jazz",
+    "acid jazz", "latin jazz", "big band", "swing", "bossa nova",
+    # classical
+    "baroque", "romantic", "modern classical", "contemporary classical",
+    "opera", "chamber music", "orchestral", "choral", "minimalism",
+    # folk/country
+    "bluegrass", "americana", "celtic", "neofolk", "freak folk",
+    "indie folk", "singer-songwriter", "acoustic",
+    # soul/funk/r&b
+    "neo-soul", "motown", "northern soul", "contemporary r&b",
+    "new jack swing", "quiet storm", "p-funk",
+    # reggae/caribbean
+    "dub", "dancehall", "rocksteady", "roots reggae", "ragga",
+    "soca", "calypso",
+    # african/world
+    "afrobeat", "afropop", "highlife", "soukous", "mbalax",
+    "fado", "flamenco", "ranchera", "cumbia", "salsa", "merengue",
+    "bachata", "reggaeton", "mpb", "samba", "forró", "tango",
+    # pop variants
+    "indie pop", "dream pop", "shoegaze", "noise pop", "power pop",
+    "baroque pop", "chamber pop", "electropop", "dance-pop", "synth-pop",
+    "art pop", "teen pop", "k-pop", "j-pop", "c-pop", "europop",
+    "britpop", "jangle pop",
+    # other
+    "experimental", "avant-garde", "spoken word", "soundtrack",
+    "new age", "easy listening", "lounge", "exotica",
+    "post-industrial", "martial industrial",
+}
+
 # Rate limiting: MusicBrainz allows 1 request per second
 _last_request_time: float = 0.0
 _MIN_REQUEST_INTERVAL: float = 1.1  # slightly over 1s to be safe
@@ -129,7 +192,7 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
     try:
         result = musicbrainzngs.get_release_by_id(
             release_id,
-            includes=["recordings", "artist-credits", "labels", "release-groups", "tags"],
+            includes=["recordings", "artist-credits", "labels", "release-groups", "genres", "tags"],
         )
     except Exception as e:
         log.error(f"MusicBrainz release lookup error for {release_id}: {e}")
@@ -204,19 +267,33 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
                 label = li["label"].get("name")
                 break
 
-    # Collect genres/tags (from release + release-group, sorted by vote count)
-    tag_map: dict[str, int] = {}
-    for tag in r.get("tag-list", []):
-        name = tag.get("name", "").strip()
-        count = int(tag.get("count", 0))
+    # Collect genres: prefer official genre-list, fall back to tag-list filtered by known genres
+    genre_map: dict[str, int] = {}
+    for g in r.get("genre-list", []):
+        name = g.get("name", "").strip()
+        count = int(g.get("count", 0))
         if name:
-            tag_map[name] = tag_map.get(name, 0) + count
-    for tag in rg.get("tag-list", []):
-        name = tag.get("name", "").strip()
-        count = int(tag.get("count", 0))
+            genre_map[name] = genre_map.get(name, 0) + count
+    for g in rg.get("genre-list", []):
+        name = g.get("name", "").strip()
+        count = int(g.get("count", 0))
         if name:
-            tag_map[name] = tag_map.get(name, 0) + count
-    genres = [t for t, _ in sorted(tag_map.items(), key=lambda x: -x[1])]
+            genre_map[name] = genre_map.get(name, 0) + count
+
+    if not genre_map:
+        # Fallback: use folksonomy tags but only those that are recognized genre names
+        for tag in r.get("tag-list", []):
+            name = tag.get("name", "").strip().lower()
+            count = int(tag.get("count", 0))
+            if name in _KNOWN_GENRES and count > 0:
+                genre_map[name] = genre_map.get(name, 0) + count
+        for tag in rg.get("tag-list", []):
+            name = tag.get("name", "").strip().lower()
+            count = int(tag.get("count", 0))
+            if name in _KNOWN_GENRES and count > 0:
+                genre_map[name] = genre_map.get(name, 0) + count
+
+    genres = [g for g, _ in sorted(genre_map.items(), key=lambda x: -x[1])]
 
     return MBRelease(
         release_id=r["id"],
