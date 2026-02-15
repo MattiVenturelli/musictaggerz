@@ -123,14 +123,20 @@ export const useAlbumStore = create<AlbumState>((set, get) => ({
   },
 
   handleAlbumUpdate: (albumId, status, confidence) => {
+    // Patch list in-place for instant feedback
     set((s) => ({
       albums: s.albums.map((a) =>
         a.id === albumId ? { ...a, status: status as AlbumSummary['status'], match_confidence: confidence ?? a.match_confidence } : a
       ),
-      currentAlbum:
-        s.currentAlbum?.id === albumId
-          ? { ...s.currentAlbum, status: status as AlbumDetail['status'], match_confidence: confidence ?? s.currentAlbum.match_confidence }
-          : s.currentAlbum,
     }))
+
+    // If we're viewing this album, refetch full detail (tracks, candidates, etc.)
+    const { currentAlbum } = get()
+    if (currentAlbum?.id === albumId) {
+      get().fetchAlbum(albumId)
+    }
+
+    // Refresh the album list too
+    get().fetchAlbums()
   },
 }))

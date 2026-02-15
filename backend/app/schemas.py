@@ -122,3 +122,6 @@ class ActivityLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+StatsResponse.model_rebuild()
