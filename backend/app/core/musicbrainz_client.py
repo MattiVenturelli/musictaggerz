@@ -117,6 +117,37 @@ class MBRelease:
     genres: List[str] = field(default_factory=list)
 
 
+def _pick_best_genres(genre_map: dict[str, int]) -> List[str]:
+    """Pick the best genres, preferring specific subgenres over broad parents.
+
+    When both "rock" and "alternative rock" are present, drops "rock" because
+    the more specific genre is more useful.  A broad genre is only kept if no
+    more specific genre containing it exists in the map.
+    """
+    if not genre_map:
+        return []
+
+    names = set(genre_map)
+    broad_to_drop: set[str] = set()
+
+    for name in names:
+        # Check if this genre is a broad parent of another genre in the map.
+        # "rock" is broad if "alternative rock", "indie rock", etc. also exist.
+        for other in names:
+            if other != name and name in other.split():
+                # 'name' appears as a whole word in 'other' → name is the parent
+                broad_to_drop.add(name)
+                break
+
+    filtered = {g: c for g, c in genre_map.items() if g not in broad_to_drop}
+
+    # If filtering removed everything (shouldn't happen), fall back to original
+    if not filtered:
+        filtered = genre_map
+
+    return [g for g, _ in sorted(filtered.items(), key=lambda x: -x[1])]
+
+
 def search_releases(artist: str, album: str, limit: int = 20) -> List[MBRelease]:
     """Search MusicBrainz for releases matching artist + album text."""
     _rate_limit()
@@ -192,7 +223,7 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
     try:
         result = musicbrainzngs.get_release_by_id(
             release_id,
-            includes=["recordings", "artist-credits", "labels", "release-groups", "genres", "tags"],
+            includes=["recordings", "artist-credits", "labels", "release-groups", "tags"],
         )
     except Exception as e:
         log.error(f"MusicBrainz release lookup error for {release_id}: {e}")
@@ -267,33 +298,19 @@ def get_release_details(release_id: str) -> Optional[MBRelease]:
                 label = li["label"].get("name")
                 break
 
-    # Collect genres: prefer official genre-list, fall back to tag-list filtered by known genres
+    # Collect genres from folksonomy tags, filtered by recognized genre names
     genre_map: dict[str, int] = {}
-    for g in r.get("genre-list", []):
-        name = g.get("name", "").strip()
-        count = int(g.get("count", 0))
-        if name:
+    for tag in r.get("tag-list", []):
+        name = tag.get("name", "").strip().lower()
+        count = int(tag.get("count", 0))
+        if name in _KNOWN_GENRES and count > 0:
             genre_map[name] = genre_map.get(name, 0) + count
-    for g in rg.get("genre-list", []):
-        name = g.get("name", "").strip()
-        count = int(g.get("count", 0))
-        if name:
+    for tag in rg.get("tag-list", []):
+        name = tag.get("name", "").strip().lower()
+        count = int(tag.get("count", 0))
+        if name in _KNOWN_GENRES and count > 0:
             genre_map[name] = genre_map.get(name, 0) + count
-
-    if not genre_map:
-        # Fallback: use folksonomy tags but only those that are recognized genre names
-        for tag in r.get("tag-list", []):
-            name = tag.get("name", "").strip().lower()
-            count = int(tag.get("count", 0))
-            if name in _KNOWN_GENRES and count > 0:
-                genre_map[name] = genre_map.get(name, 0) + count
-        for tag in rg.get("tag-list", []):
-            name = tag.get("name", "").strip().lower()
-            count = int(tag.get("count", 0))
-            if name in _KNOWN_GENRES and count > 0:
-                genre_map[name] = genre_map.get(name, 0) + count
-
-    genres = [g for g, _ in sorted(genre_map.items(), key=lambda x: -x[1])]
+    genres = _pick_best_genres(genre_map)
 
     return MBRelease(
         release_id=r["id"],

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     artwork_min_size: int = 500
     artwork_max_size: int = 1400
     artwork_sources: List[str] = [
-        "filesystem", "itunes", "fanarttv", "spotify", "coverart"
+        "coverart", "filesystem", "fanarttv", "itunes", "spotify"
     ]
 
     watch_stabilization_delay: int = 30

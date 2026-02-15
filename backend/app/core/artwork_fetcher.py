@@ -262,7 +262,10 @@ def fetch_artwork(
     """Fetch best available artwork following configured source priority.
 
     Returns (image_data, mime_type) or None.
-    Source order from settings: filesystem, itunes, fanarttv, coverart
+
+    Cover Art Archive is always tried first when a MusicBrainz release ID is
+    available, because it's the only source tied to the exact release.  The
+    remaining sources follow the user-configured order as a fallback.
     """
     source_map = {
         "filesystem": lambda: fetch_from_filesystem(folder_path),
@@ -271,7 +274,15 @@ def fetch_artwork(
         "coverart": lambda: fetch_from_coverart_archive(musicbrainz_release_id),
     }
 
-    for source_name in settings.artwork_sources:
+    # Build source order: CAA first (exact match), then user-configured sources
+    order: List[str] = []
+    if musicbrainz_release_id:
+        order.append("coverart")
+    for name in settings.artwork_sources:
+        if name not in order:
+            order.append(name)
+
+    for source_name in order:
         fetcher = source_map.get(source_name)
         if not fetcher:
             continue

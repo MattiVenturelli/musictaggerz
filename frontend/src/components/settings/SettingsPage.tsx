@@ -27,7 +27,7 @@ const DEFAULTS: Record<string, string> = {
   preferred_media: 'Digital Media,CD',
   artwork_min_size: '500',
   artwork_max_size: '1400',
-  artwork_sources: 'filesystem,itunes,fanarttv,spotify,coverart',
+  artwork_sources: 'coverart,filesystem,fanarttv,itunes,spotify',
   fanarttv_api_key: '',
   spotify_client_id: '',
   spotify_client_secret: '',
