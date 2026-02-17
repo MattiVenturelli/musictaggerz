@@ -33,7 +33,7 @@ class Base(DeclarativeBase):
 
 
 def init_db():
-    from app.models import Album, Track, MatchCandidate, Setting, ActivityLog  # noqa: F401
+    from app.models import Album, Track, MatchCandidate, Setting, ActivityLog, TagBackup, TrackTagSnapshot  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
     _seed_default_settings()
@@ -47,10 +47,27 @@ def _migrate_add_columns():
     with engine.connect() as conn:
         # Check existing columns in albums table
         result = conn.execute(text("PRAGMA table_info(albums)"))
-        existing = {row[1] for row in result}
-        if "musicbrainz_release_group_id" not in existing:
+        album_cols = {row[1] for row in result}
+        if "musicbrainz_release_group_id" not in album_cols:
             conn.execute(text("ALTER TABLE albums ADD COLUMN musicbrainz_release_group_id TEXT"))
-            conn.commit()
+        if "replaygain_album_gain" not in album_cols:
+            conn.execute(text("ALTER TABLE albums ADD COLUMN replaygain_album_gain TEXT"))
+        if "replaygain_album_peak" not in album_cols:
+            conn.execute(text("ALTER TABLE albums ADD COLUMN replaygain_album_peak TEXT"))
+
+        # Check existing columns in tracks table
+        result = conn.execute(text("PRAGMA table_info(tracks)"))
+        track_cols = {row[1] for row in result}
+        if "has_lyrics" not in track_cols:
+            conn.execute(text("ALTER TABLE tracks ADD COLUMN has_lyrics BOOLEAN DEFAULT 0"))
+        if "lyrics_synced" not in track_cols:
+            conn.execute(text("ALTER TABLE tracks ADD COLUMN lyrics_synced BOOLEAN DEFAULT 0"))
+        if "replaygain_track_gain" not in track_cols:
+            conn.execute(text("ALTER TABLE tracks ADD COLUMN replaygain_track_gain TEXT"))
+        if "replaygain_track_peak" not in track_cols:
+            conn.execute(text("ALTER TABLE tracks ADD COLUMN replaygain_track_peak TEXT"))
+
+        conn.commit()
 
 
 def _seed_default_settings():
@@ -92,6 +109,25 @@ def _seed_default_settings():
                     ]),
                     value_type="list",
                     description="Regex patterns to detect disc subfolders (one capture group each)"),
+            # Backup settings
+            Setting(key="backup_enabled", value="true", value_type="bool",
+                    description="Create tag backups before writing"),
+            Setting(key="backup_max_per_album", value="5", value_type="int",
+                    description="Maximum backups to keep per album"),
+            # Lyrics settings
+            Setting(key="lyrics_enabled", value="true", value_type="bool",
+                    description="Enable lyrics fetching"),
+            Setting(key="lyrics_auto_fetch", value="false", value_type="bool",
+                    description="Auto-fetch lyrics during tagging"),
+            Setting(key="lyrics_prefer_synced", value="true", value_type="bool",
+                    description="Prefer synced (LRC) lyrics when available"),
+            # ReplayGain settings
+            Setting(key="replaygain_enabled", value="true", value_type="bool",
+                    description="Enable ReplayGain calculation"),
+            Setting(key="replaygain_auto_calculate", value="false", value_type="bool",
+                    description="Auto-calculate ReplayGain during tagging"),
+            Setting(key="replaygain_reference_loudness", value="-18.0", value_type="float",
+                    description="Reference loudness in LUFS for ReplayGain"),
         ]
         for d in defaults:
             existing = db.query(Setting).filter(Setting.key == d.key).first()

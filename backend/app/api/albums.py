@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 
 from app.database import get_db
-from app.models import Album, Track, MatchCandidate, ActivityLog
+from app.models import Album, Track, MatchCandidate, ActivityLog, TagBackup, TrackTagSnapshot
 from app.schemas import (
     AlbumSummary, AlbumDetail, AlbumListResponse,
     TagRequest, ScanRequest, TrackResponse, MatchCandidateResponse,
     BatchActionRequest,
     ArtworkOptionResponse, ArtworkDiscoveryResponse, ApplyArtworkRequest,
+    TagBackupResponse, ManualTagEditRequest, BulkManualTagEditRequest,
 )
 from app.core.audio_reader import read_track
 from app.core.artwork_discovery import (
@@ -19,6 +20,7 @@ from app.core.artwork_discovery import (
 )
 from app.core.artwork_fetcher import _download_image, save_artwork_to_folder
 from app.core.tagger import write_tags, TagData
+from app.core.tag_backup import read_full_tags, create_backup, restore_backup, delete_backup
 from app.services.album_scanner import scan_directory
 from app.services.queue_manager import queue_manager
 from app.utils.logger import log
@@ -383,6 +385,356 @@ def batch_skip(request: BatchActionRequest, db: Session = Depends(get_db)):
             skipped.append(album_id)
     db.commit()
     return {"message": f"Skipped {len(skipped)} albums", "album_ids": skipped}
+
+
+# ─── Tag Backup & Restore ─────────────────────────────────────────
+
+@router.get("/{album_id}/backups", response_model=List[TagBackupResponse])
+def list_backups(album_id: int, db: Session = Depends(get_db)):
+    """List all tag backups for an album."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    backups = (
+        db.query(TagBackup)
+        .filter(TagBackup.album_id == album_id)
+        .order_by(TagBackup.created_at.desc())
+        .all()
+    )
+    result = []
+    for b in backups:
+        count = db.query(TrackTagSnapshot).filter(TrackTagSnapshot.backup_id == b.id).count()
+        result.append(TagBackupResponse(
+            id=b.id, album_id=b.album_id, action=b.action,
+            created_at=b.created_at, track_count=count,
+        ))
+    return result
+
+
+@router.post("/{album_id}/backups/{backup_id}/restore")
+def restore_album_backup(album_id: int, backup_id: int, db: Session = Depends(get_db)):
+    """Restore tags from a backup. Creates a pre-restore backup first."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    backup = db.query(TagBackup).filter(
+        TagBackup.id == backup_id, TagBackup.album_id == album_id
+    ).first()
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    # Create a safety backup of current state before restoring
+    create_backup(db, album_id, "pre_restore")
+
+    success, total = restore_backup(db, backup_id)
+    db.add(ActivityLog(
+        album_id=album_id, action="backup_restored",
+        details=f"Backup {backup_id} restored: {success}/{total} tracks",
+    ))
+    db.commit()
+    return {"message": "Backup restored", "success": success, "total": total}
+
+
+@router.delete("/{album_id}/backups/{backup_id}")
+def delete_album_backup(album_id: int, backup_id: int, db: Session = Depends(get_db)):
+    """Delete a specific backup."""
+    backup = db.query(TagBackup).filter(
+        TagBackup.id == backup_id, TagBackup.album_id == album_id
+    ).first()
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    delete_backup(db, backup_id)
+    db.commit()
+    return {"message": "Backup deleted"}
+
+
+# ─── Manual Tag Editing ──────────────────────────────────────────
+
+@router.put("/{album_id}/tracks/{track_id}/tags")
+def edit_track_tags(
+    album_id: int, track_id: int,
+    request: ManualTagEditRequest,
+    db: Session = Depends(get_db),
+):
+    """Edit tags for a single track."""
+    track = db.query(Track).filter(
+        Track.id == track_id, Track.album_id == album_id
+    ).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not os.path.isfile(track.path):
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    # Backup before editing
+    create_backup(db, album_id, "manual_edit", track_ids=[track_id])
+
+    # Read current tags, merge with changes
+    current = read_full_tags(track.path)
+    if not current:
+        raise HTTPException(status_code=500, detail="Could not read file tags")
+
+    changes = request.model_dump(exclude_none=True)
+    for field, value in changes.items():
+        setattr(current, field, value)
+
+    if not write_tags(track.path, current):
+        raise HTTPException(status_code=500, detail="Failed to write tags")
+
+    # Update DB record
+    if request.title is not None:
+        track.title = request.title
+    if request.artist is not None:
+        track.artist = request.artist
+    if request.track_number is not None:
+        track.track_number = request.track_number
+    if request.disc_number is not None:
+        track.disc_number = request.disc_number
+    if request.musicbrainz_recording_id is not None:
+        track.musicbrainz_recording_id = request.musicbrainz_recording_id
+
+    db.add(ActivityLog(
+        album_id=album_id, action="manual_edit",
+        details=f"Track {track_id}: edited {list(changes.keys())}",
+    ))
+    db.commit()
+    return {"message": "Track tags updated", "fields": list(changes.keys())}
+
+
+@router.put("/{album_id}/tags")
+def edit_album_tags(
+    album_id: int,
+    request: BulkManualTagEditRequest,
+    db: Session = Depends(get_db),
+):
+    """Edit album-level tags applied to all tracks."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    changes = request.model_dump(exclude_none=True)
+    if not changes:
+        return {"message": "No changes"}
+
+    # Backup before editing
+    create_backup(db, album_id, "manual_edit")
+
+    tracks = db.query(Track).filter(Track.album_id == album_id).all()
+    success = 0
+    for track in tracks:
+        if not os.path.isfile(track.path):
+            continue
+        current = read_full_tags(track.path)
+        if not current:
+            continue
+        for field, value in changes.items():
+            setattr(current, field, value)
+        if write_tags(track.path, current):
+            success += 1
+
+    # Update album DB record
+    if request.album is not None:
+        album.album = request.album
+    if request.album_artist is not None:
+        album.artist = request.album_artist
+    if request.year is not None:
+        album.year = request.year
+
+    db.add(ActivityLog(
+        album_id=album_id, action="manual_edit",
+        details=f"Album-level: edited {list(changes.keys())} on {success}/{len(tracks)} tracks",
+    ))
+    db.commit()
+    return {"message": "Album tags updated", "success": success, "total": len(tracks)}
+
+
+# ─── Lyrics ──────────────────────────────────────────────────────
+
+@router.post("/{album_id}/lyrics")
+def fetch_album_lyrics(album_id: int, db: Session = Depends(get_db)):
+    """Fetch and embed lyrics for all tracks in an album."""
+    from app.core.lyrics_client import fetch_lyrics
+    from app.core.lyrics_tagger import write_lyrics
+
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    create_backup(db, album_id, "lyrics")
+
+    tracks = db.query(Track).filter(Track.album_id == album_id).all()
+    results = {"found": 0, "not_found": 0, "errors": 0}
+
+    for track in tracks:
+        if not os.path.isfile(track.path):
+            results["errors"] += 1
+            continue
+
+        duration = track.duration or 0
+        lr = fetch_lyrics(
+            artist=track.artist or album.artist or "",
+            title=track.title or "",
+            album=album.album or "",
+            duration=int(duration),
+        )
+        if not lr or (not lr.plain_lyrics and not lr.synced_lyrics):
+            if lr and lr.instrumental:
+                track.has_lyrics = False
+                track.lyrics_synced = False
+            results["not_found"] += 1
+            continue
+
+        if write_lyrics(track.path, lr.plain_lyrics, lr.synced_lyrics):
+            track.has_lyrics = True
+            track.lyrics_synced = bool(lr.synced_lyrics)
+            results["found"] += 1
+        else:
+            results["errors"] += 1
+
+    db.add(ActivityLog(
+        album_id=album_id, action="lyrics_fetched",
+        details=f"Found: {results['found']}, Not found: {results['not_found']}, Errors: {results['errors']}",
+    ))
+    db.commit()
+    return {"message": "Lyrics fetched", **results}
+
+
+@router.post("/{album_id}/tracks/{track_id}/lyrics")
+def fetch_track_lyrics(album_id: int, track_id: int, db: Session = Depends(get_db)):
+    """Fetch and embed lyrics for a single track."""
+    from app.core.lyrics_client import fetch_lyrics
+    from app.core.lyrics_tagger import write_lyrics
+
+    track = db.query(Track).filter(
+        Track.id == track_id, Track.album_id == album_id
+    ).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    if not os.path.isfile(track.path):
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    duration = track.duration or 0
+    lr = fetch_lyrics(
+        artist=track.artist or album.artist or "",
+        title=track.title or "",
+        album=album.album or "",
+        duration=int(duration),
+    )
+
+    if not lr or (not lr.plain_lyrics and not lr.synced_lyrics):
+        return {"message": "No lyrics found", "found": False, "instrumental": lr.instrumental if lr else False}
+
+    if not write_lyrics(track.path, lr.plain_lyrics, lr.synced_lyrics):
+        raise HTTPException(status_code=500, detail="Failed to write lyrics")
+
+    track.has_lyrics = True
+    track.lyrics_synced = bool(lr.synced_lyrics)
+    db.commit()
+    return {"message": "Lyrics written", "found": True, "synced": bool(lr.synced_lyrics)}
+
+
+@router.get("/{album_id}/tracks/{track_id}/lyrics")
+def get_track_lyrics(album_id: int, track_id: int, db: Session = Depends(get_db)):
+    """Read lyrics from the audio file."""
+    from app.core.lyrics_tagger import read_lyrics
+
+    track = db.query(Track).filter(
+        Track.id == track_id, Track.album_id == album_id
+    ).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not os.path.isfile(track.path):
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    plain, synced = read_lyrics(track.path)
+    return {"plain": plain, "synced": synced}
+
+
+# ─── ReplayGain ──────────────────────────────────────────────────
+
+@router.post("/{album_id}/replaygain")
+def calculate_replaygain(
+    album_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Launch ReplayGain calculation as a background task."""
+    album = db.query(Album).filter(Album.id == album_id).first()
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    background_tasks.add_task(_replaygain_task, album_id)
+    return {"message": "ReplayGain calculation started", "album_id": album_id}
+
+
+def _replaygain_task(album_id: int):
+    """Background task for ReplayGain analysis + tag writing."""
+    from app.core.replaygain import analyze_album
+    from app.core.replaygain_tagger import write_replaygain
+    from app.database import SessionLocal
+    from app.services.notification_service import notifications
+
+    db = SessionLocal()
+    try:
+        album = db.query(Album).filter(Album.id == album_id).first()
+        if not album:
+            return
+
+        tracks = db.query(Track).filter(Track.album_id == album_id).all()
+        filepaths = [t.path for t in tracks if os.path.isfile(t.path)]
+        if not filepaths:
+            return
+
+        notifications.send_progress(album_id, 0.1, "Creating backup...")
+        create_backup(db, album_id, "replaygain")
+        db.commit()
+
+        notifications.send_progress(album_id, 0.2, "Analyzing loudness...")
+        rg = analyze_album(filepaths)
+        if not rg:
+            notifications.send_notification("error", f"ReplayGain analysis failed for album {album_id}")
+            return
+
+        notifications.send_progress(album_id, 0.7, "Writing ReplayGain tags...")
+        path_to_track = {t.path: t for t in tracks}
+        success = 0
+        for i, filepath in enumerate(filepaths):
+            track_rg = rg.tracks.get(filepath)
+            if not track_rg:
+                continue
+            if write_replaygain(filepath, track_rg.gain, track_rg.peak, rg.album_gain, rg.album_peak):
+                track = path_to_track.get(filepath)
+                if track:
+                    track.replaygain_track_gain = track_rg.gain
+                    track.replaygain_track_peak = track_rg.peak
+                success += 1
+
+        album.replaygain_album_gain = rg.album_gain
+        album.replaygain_album_peak = rg.album_peak
+
+        db.add(ActivityLog(
+            album_id=album_id, action="replaygain_calculated",
+            details=f"Album gain: {rg.album_gain}, written to {success}/{len(filepaths)} tracks",
+        ))
+        db.commit()
+
+        notifications.send_progress(album_id, 1.0, "ReplayGain complete")
+        notifications.send_notification("success", f"ReplayGain calculated for album {album_id}")
+        # Trigger a refresh of the album detail
+        notifications.send_album_update(album_id, album.status)
+
+    except Exception as e:
+        log.error(f"ReplayGain task failed for album {album_id}: {e}")
+        notifications.send_notification("error", f"ReplayGain failed: {str(e)[:100]}")
+    finally:
+        db.close()
 
 
 @router.post("/scan")

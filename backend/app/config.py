@@ -37,6 +37,20 @@ class Settings(BaseSettings):
         r"^cassette\s*(\d+)$",
     ]
 
+    # Backup settings
+    backup_enabled: bool = True
+    backup_max_per_album: int = 5
+
+    # Lyrics settings
+    lyrics_enabled: bool = True
+    lyrics_auto_fetch: bool = False
+    lyrics_prefer_synced: bool = True
+
+    # ReplayGain settings
+    replaygain_enabled: bool = True
+    replaygain_auto_calculate: bool = False
+    replaygain_reference_loudness: float = -18.0
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -8,7 +8,7 @@ from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.id3 import (
-    ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, TCON, TPUB,
+    TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, TCON, TPUB,
     TXXX, APIC, ID3NoHeaderError,
 )
 
@@ -59,6 +59,10 @@ def write_tags(filepath: str, tags: TagData) -> bool:
 def _write_flac(filepath: str, tags: TagData) -> bool:
     audio = FLAC(filepath)
 
+    # Clear all existing tags to prevent stale metadata from previous tagging
+    audio.clear()
+    audio.clear_pictures()
+
     if tags.title is not None:
         audio["title"] = tags.title
     if tags.artist is not None:
@@ -97,7 +101,6 @@ def _write_flac(filepath: str, tags: TagData) -> bool:
         pic.mime = tags.cover_mime
         pic.desc = "Front"
         pic.data = tags.cover_data
-        audio.clear_pictures()
         audio.add_picture(pic)
 
     audio.save()
@@ -114,54 +117,42 @@ def _write_mp3(filepath: str, tags: TagData) -> bool:
         audio = MP3(filepath)
         audio.add_tags()
 
-    id3 = audio.tags
+    # Clear all existing ID3 frames to prevent stale metadata from previous tagging
+    audio.tags.clear()
 
     if tags.title is not None:
-        id3.delall("TIT2")
-        id3.add(TIT2(encoding=3, text=tags.title))
+        audio.tags.add(TIT2(encoding=3, text=tags.title))
     if tags.artist is not None:
-        id3.delall("TPE1")
-        id3.add(TPE1(encoding=3, text=tags.artist))
+        audio.tags.add(TPE1(encoding=3, text=tags.artist))
     if tags.album_artist is not None:
-        id3.delall("TPE2")
-        id3.add(TPE2(encoding=3, text=tags.album_artist))
+        audio.tags.add(TPE2(encoding=3, text=tags.album_artist))
     if tags.album is not None:
-        id3.delall("TALB")
-        id3.add(TALB(encoding=3, text=tags.album))
+        audio.tags.add(TALB(encoding=3, text=tags.album))
     if tags.track_number is not None:
-        id3.delall("TRCK")
         tn = str(tags.track_number)
         if tags.track_total:
             tn += f"/{tags.track_total}"
-        id3.add(TRCK(encoding=3, text=tn))
+        audio.tags.add(TRCK(encoding=3, text=tn))
     if tags.disc_number is not None:
-        id3.delall("TPOS")
         dn = str(tags.disc_number)
         if tags.disc_total:
             dn += f"/{tags.disc_total}"
-        id3.add(TPOS(encoding=3, text=dn))
+        audio.tags.add(TPOS(encoding=3, text=dn))
     if tags.year is not None:
-        id3.delall("TDRC")
-        id3.add(TDRC(encoding=3, text=str(tags.year)))
+        audio.tags.add(TDRC(encoding=3, text=str(tags.year)))
     if tags.genre is not None:
-        id3.delall("TCON")
-        id3.add(TCON(encoding=3, text=tags.genre))
+        audio.tags.add(TCON(encoding=3, text=tags.genre))
     if tags.label is not None:
-        id3.delall("TPUB")
-        id3.add(TPUB(encoding=3, text=tags.label))
+        audio.tags.add(TPUB(encoding=3, text=tags.label))
     if tags.country is not None:
-        id3.delall("TXXX:MusicBrainz Album Release Country")
-        id3.add(TXXX(encoding=3, desc="MusicBrainz Album Release Country", text=tags.country))
+        audio.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Release Country", text=tags.country))
     if tags.musicbrainz_release_id is not None:
-        id3.delall("TXXX:MusicBrainz Album Id")
-        id3.add(TXXX(encoding=3, desc="MusicBrainz Album Id", text=tags.musicbrainz_release_id))
+        audio.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Id", text=tags.musicbrainz_release_id))
     if tags.musicbrainz_recording_id is not None:
-        id3.delall("TXXX:MusicBrainz Recording Id")
-        id3.add(TXXX(encoding=3, desc="MusicBrainz Recording Id", text=tags.musicbrainz_recording_id))
+        audio.tags.add(TXXX(encoding=3, desc="MusicBrainz Recording Id", text=tags.musicbrainz_recording_id))
 
     if tags.cover_data:
-        id3.delall("APIC")
-        id3.add(APIC(
+        audio.tags.add(APIC(
             encoding=3,
             mime=tags.cover_mime,
             type=3,  # Front cover
@@ -176,6 +167,9 @@ def _write_mp3(filepath: str, tags: TagData) -> bool:
 
 def _write_mp4(filepath: str, tags: TagData) -> bool:
     audio = MP4(filepath)
+
+    # Clear all existing tags to prevent stale metadata from previous tagging
+    audio.clear()
 
     if tags.title is not None:
         audio["\xa9nam"] = [tags.title]
@@ -227,6 +221,9 @@ def _write_ogg(filepath: str, tags: TagData) -> bool:
         audio = OggOpus(filepath)
     else:
         audio = OggVorbis(filepath)
+
+    # Clear all existing tags to prevent stale metadata from previous tagging
+    audio.clear()
 
     if tags.title is not None:
         audio["title"] = tags.title

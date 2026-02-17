@@ -28,6 +28,8 @@ class Album(Base):
     track_count = Column(Integer)
     error_message = Column(Text)
     retry_count = Column(Integer, default=0)
+    replaygain_album_gain = Column(String)
+    replaygain_album_peak = Column(String)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -54,6 +56,10 @@ class Track(Base):
     musicbrainz_recording_id = Column(String)
     status = Column(String, default="pending")
     error_message = Column(Text)
+    has_lyrics = Column(Boolean, default=False)
+    lyrics_synced = Column(Boolean, default=False)
+    replaygain_track_gain = Column(String)
+    replaygain_track_peak = Column(String)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -111,4 +117,37 @@ class ActivityLog(Base):
 
     __table_args__ = (
         Index("idx_activity_timestamp", "timestamp"),
+    )
+
+
+class TagBackup(Base):
+    __tablename__ = "tag_backups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    album_id = Column(Integer, ForeignKey("albums.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String, nullable=False)  # musicbrainz_tag, manual_edit, artwork, lyrics, replaygain, pre_restore
+    created_at = Column(DateTime, default=utcnow)
+
+    snapshots = relationship("TrackTagSnapshot", back_populates="backup", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_backups_album", "album_id"),
+    )
+
+
+class TrackTagSnapshot(Base):
+    __tablename__ = "track_tag_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    backup_id = Column(Integer, ForeignKey("tag_backups.id", ondelete="CASCADE"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
+    path = Column(String, nullable=False)
+    tags_json = Column(Text, nullable=False)  # JSON serialized tag data
+    has_cover = Column(Boolean, default=False)
+    cover_path = Column(String)  # path to saved cover file on disk
+
+    backup = relationship("TagBackup", back_populates="snapshots")
+
+    __table_args__ = (
+        Index("idx_snapshots_backup", "backup_id"),
     )

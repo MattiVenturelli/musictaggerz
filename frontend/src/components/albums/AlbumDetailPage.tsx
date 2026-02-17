@@ -8,6 +8,10 @@ import { TrackList } from './TrackList'
 import { MatchReviewPanel } from './MatchReviewPanel'
 import { ProgressPanel } from './ProgressPanel'
 import { ArtworkChooser } from './ArtworkChooser'
+import { BackupPanel } from './BackupPanel'
+import { AlbumTagEditor } from './AlbumTagEditor'
+import { LyricsPanel } from './LyricsPanel'
+import { ReplayGainPanel } from './ReplayGainPanel'
 
 export function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -104,6 +108,7 @@ export function AlbumDetailPage() {
       <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">
         <h2 className="text-sm font-medium text-text-muted mb-4">Actions & Matching</h2>
         <MatchReviewPanel album={album} />
+        <AlbumTagEditor album={album} />
       </div>
 
       {/* Artwork chooser */}
@@ -112,10 +117,23 @@ export function AlbumDetailPage() {
         <ArtworkChooser album={album} />
       </div>
 
+      {/* Tag Backups */}
+      <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">
+        <BackupPanel albumId={album.id} />
+      </div>
+
+      {/* Lyrics & ReplayGain */}
+      <div className="bg-surface-100 rounded-xl border border-surface-400 p-5 space-y-4">
+        <h2 className="text-sm font-medium text-text-muted">Features</h2>
+        <LyricsPanel album={album} />
+        <div className="border-t border-surface-400" />
+        <ReplayGainPanel album={album} />
+      </div>
+
       {/* Track list */}
       <div className="bg-surface-100 rounded-xl border border-surface-400 p-5">
         <h2 className="text-sm font-medium text-text-muted mb-4">Tracks</h2>
-        <TrackList tracks={album.tracks} />
+        <TrackList tracks={album.tracks} albumId={album.id} />
       </div>
     </div>
   )

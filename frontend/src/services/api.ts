@@ -8,6 +8,7 @@ import type {
   AlbumFilters,
   ArtworkDiscoveryResponse,
   ApplyArtworkRequest,
+  TagBackupResponse,
 } from '@/types'
 
 const api = axios.create({
@@ -122,6 +123,61 @@ export async function applyArtwork(albumId: number, request: ApplyArtworkRequest
 // Cover art URL helper
 export function getAlbumCoverUrl(albumId: number): string {
   return `/api/albums/${albumId}/cover`
+}
+
+// ─── Tag Backups ────────────────────────────────────────────────
+
+export async function fetchBackups(albumId: number): Promise<TagBackupResponse[]> {
+  const { data } = await api.get<TagBackupResponse[]>(`/albums/${albumId}/backups`)
+  return data
+}
+
+export async function restoreBackup(albumId: number, backupId: number): Promise<void> {
+  await api.post(`/albums/${albumId}/backups/${backupId}/restore`)
+}
+
+export async function deleteBackup(albumId: number, backupId: number): Promise<void> {
+  await api.delete(`/albums/${albumId}/backups/${backupId}`)
+}
+
+// ─── Manual Tag Editing ─────────────────────────────────────────
+
+export async function editTrackTags(
+  albumId: number,
+  trackId: number,
+  tags: Record<string, string | number | null>,
+): Promise<void> {
+  await api.put(`/albums/${albumId}/tracks/${trackId}/tags`, tags)
+}
+
+export async function editAlbumTags(
+  albumId: number,
+  tags: Record<string, string | number | null>,
+): Promise<void> {
+  await api.put(`/albums/${albumId}/tags`, tags)
+}
+
+// ─── Lyrics ─────────────────────────────────────────────────────
+
+export async function fetchAlbumLyrics(albumId: number): Promise<{ found: number; not_found: number; errors: number }> {
+  const { data } = await api.post(`/albums/${albumId}/lyrics`)
+  return data
+}
+
+export async function fetchTrackLyricsAction(albumId: number, trackId: number): Promise<{ found: boolean; synced?: boolean }> {
+  const { data } = await api.post(`/albums/${albumId}/tracks/${trackId}/lyrics`)
+  return data
+}
+
+export async function getTrackLyrics(albumId: number, trackId: number): Promise<{ plain: string | null; synced: string | null }> {
+  const { data } = await api.get(`/albums/${albumId}/tracks/${trackId}/lyrics`)
+  return data
+}
+
+// ─── ReplayGain ─────────────────────────────────────────────────
+
+export async function calculateReplayGain(albumId: number): Promise<void> {
+  await api.post(`/albums/${albumId}/replaygain`)
 }
 
 export default api

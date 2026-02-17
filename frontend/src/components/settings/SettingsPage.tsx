@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, type KeyboardEvent } from 'react'
 import {
   Save, Sliders, Globe, Image, Key, X, Plus, GripVertical,
-  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info, Github,
+  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info, Github, Puzzle,
 } from 'lucide-react'
 import { useSettingsStore } from '@/store/useSettingsStore'
 import { useNotificationStore } from '@/store/useNotificationStore'
@@ -12,6 +12,7 @@ const tabs = [
   { id: 'general', label: 'General', icon: Sliders },
   { id: 'matching', label: 'Matching', icon: Globe },
   { id: 'artwork', label: 'Artwork', icon: Image },
+  { id: 'features', label: 'Features', icon: Puzzle },
   { id: 'api', label: 'API Keys', icon: Key },
 ] as const
 
@@ -39,6 +40,15 @@ const DEFAULTS: Record<string, string> = {
     String.raw`^side\s*([A-Da-d\d])$`,
     String.raw`^cassette\s*(\d+)$`,
   ]),
+  // Features
+  backup_enabled: 'true',
+  backup_max_per_album: '5',
+  lyrics_enabled: 'true',
+  lyrics_auto_fetch: 'false',
+  lyrics_prefer_synced: 'true',
+  replaygain_enabled: 'true',
+  replaygain_auto_calculate: 'false',
+  replaygain_reference_loudness: '-18.0',
 }
 
 const ARTWORK_SOURCE_LABELS: Record<string, string> = {
@@ -159,6 +169,9 @@ export function SettingsPage() {
         )}
         {activeTab === 'artwork' && (
           <ArtworkTab draft={draft} updateDraft={updateDraft} />
+        )}
+        {activeTab === 'features' && (
+          <FeaturesTab draft={draft} updateDraft={updateDraft} />
         )}
         {activeTab === 'api' && (
           <ApiKeysTab draft={draft} updateDraft={updateDraft} />
@@ -367,6 +380,151 @@ function MatchingTab({ draft, updateDraft }: TabProps) {
           onChange={(v) => updateDraft('preferred_media', v)}
           placeholder="Add media format (e.g. Vinyl, Cassette)..."
         />
+      </SettingsCard>
+    </>
+  )
+}
+
+function FeaturesTab({ draft, updateDraft }: TabProps) {
+  return (
+    <>
+      <SettingsCard title="Tag Backups" description="Automatically save tag state before any write operation so you can restore later.">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-text">
+                {draft['backup_enabled'] === 'true' ? 'Enabled' : 'Disabled'}
+              </p>
+              <p className="text-xs text-text-subtle mt-0.5">
+                {draft['backup_enabled'] === 'true'
+                  ? 'Backups are created before tagging, editing, artwork, lyrics, and ReplayGain'
+                  : 'No backups will be created (cannot undo tag changes)'}
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={draft['backup_enabled'] === 'true'}
+              onChange={(v) => updateDraft('backup_enabled', v ? 'true' : 'false')}
+            />
+          </div>
+          {draft['backup_enabled'] === 'true' && (
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Max Backups Per Album</label>
+              <p className="text-xs text-text-subtle mb-2">Older backups are automatically pruned</p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="1"
+                  max="20"
+                  step="1"
+                  value={draft['backup_max_per_album'] || '5'}
+                  onChange={(e) => updateDraft('backup_max_per_album', e.target.value)}
+                  className="flex-1 accent-accent-blue"
+                />
+                <span className="text-sm font-mono text-text w-6 text-right">
+                  {draft['backup_max_per_album'] || '5'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="Lyrics (LRCLIB)" description="Fetch and embed song lyrics from LRCLIB. Supports plain text and synced (LRC) lyrics.">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-text">
+                {draft['lyrics_enabled'] === 'true' ? 'Enabled' : 'Disabled'}
+              </p>
+              <p className="text-xs text-text-subtle mt-0.5">
+                No API key required
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={draft['lyrics_enabled'] === 'true'}
+              onChange={(v) => updateDraft('lyrics_enabled', v ? 'true' : 'false')}
+            />
+          </div>
+          {draft['lyrics_enabled'] === 'true' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-text">Auto-fetch during tagging</p>
+                  <p className="text-xs text-text-subtle mt-0.5">
+                    Automatically fetch lyrics after MusicBrainz tagging
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={draft['lyrics_auto_fetch'] === 'true'}
+                  onChange={(v) => updateDraft('lyrics_auto_fetch', v ? 'true' : 'false')}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-text">Prefer synced lyrics</p>
+                  <p className="text-xs text-text-subtle mt-0.5">
+                    Use LRC (timestamped) lyrics when available
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={draft['lyrics_prefer_synced'] === 'true'}
+                  onChange={(v) => updateDraft('lyrics_prefer_synced', v ? 'true' : 'false')}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="ReplayGain" description="Calculate and embed ReplayGain volume normalization using ffmpeg. Requires ffmpeg to be installed.">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-text">
+                {draft['replaygain_enabled'] === 'true' ? 'Enabled' : 'Disabled'}
+              </p>
+              <p className="text-xs text-text-subtle mt-0.5">
+                Analyzes track loudness and writes gain/peak tags
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={draft['replaygain_enabled'] === 'true'}
+              onChange={(v) => updateDraft('replaygain_enabled', v ? 'true' : 'false')}
+            />
+          </div>
+          {draft['replaygain_enabled'] === 'true' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-text">Auto-calculate during tagging</p>
+                  <p className="text-xs text-text-subtle mt-0.5">
+                    Automatically calculate ReplayGain after MusicBrainz tagging (CPU-intensive)
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={draft['replaygain_auto_calculate'] === 'true'}
+                  onChange={(v) => updateDraft('replaygain_auto_calculate', v ? 'true' : 'false')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Reference Loudness</label>
+                <p className="text-xs text-text-subtle mb-2">Standard is -18.0 LUFS (Opus uses -23.0 LUFS internally)</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="-30"
+                    max="-10"
+                    value={draft['replaygain_reference_loudness'] || '-18.0'}
+                    onChange={(e) => updateDraft('replaygain_reference_loudness', e.target.value)}
+                    className="w-32 px-3 py-2 bg-surface-200 border border-surface-400 rounded-lg text-sm text-text focus:outline-none focus:border-accent-blue transition-colors font-mono"
+                  />
+                  <span className="text-xs text-text-subtle">LUFS</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </SettingsCard>
     </>
   )

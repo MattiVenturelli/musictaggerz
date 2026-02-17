@@ -10,6 +10,10 @@ export interface TrackResponse {
   status: string
   error_message: string | null
   musicbrainz_recording_id: string | null
+  has_lyrics: boolean
+  lyrics_synced: boolean
+  replaygain_track_gain: string | null
+  replaygain_track_peak: string | null
 }
 
 export interface MatchCandidateResponse {
@@ -45,8 +49,18 @@ export interface AlbumDetail extends AlbumSummary {
   cover_url: string | null
   error_message: string | null
   created_at: string | null
+  replaygain_album_gain: string | null
+  replaygain_album_peak: string | null
   tracks: TrackResponse[]
   match_candidates: MatchCandidateResponse[]
+}
+
+export interface TagBackupResponse {
+  id: number
+  album_id: number
+  action: string
+  created_at: string | null
+  track_count: number
 }
 
 export interface AlbumListResponse {

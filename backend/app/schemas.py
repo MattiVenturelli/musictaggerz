@@ -18,6 +18,10 @@ class TrackResponse(TrackBase):
     musicbrainz_recording_id: Optional[str] = None
     status: str
     error_message: Optional[str] = None
+    has_lyrics: Optional[bool] = False
+    lyrics_synced: Optional[bool] = False
+    replaygain_track_gain: Optional[str] = None
+    replaygain_track_peak: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -62,6 +66,8 @@ class AlbumDetail(AlbumSummary):
     cover_url: Optional[str] = None
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
+    replaygain_album_gain: Optional[str] = None
+    replaygain_album_peak: Optional[str] = None
     tracks: List[TrackResponse] = []
     match_candidates: List[MatchCandidateResponse] = []
 
@@ -145,3 +151,42 @@ class ApplyArtworkRequest(BaseModel):
     source: str
     full_url: str
     file: Optional[str] = None
+
+
+# ─── Tag Backup schemas ──────────────────────────────────────────
+
+class TagBackupResponse(BaseModel):
+    id: int
+    album_id: int
+    action: str
+    created_at: Optional[datetime] = None
+    track_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Manual Tag Editing schemas ──────────────────────────────────
+
+class ManualTagEditRequest(BaseModel):
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    album_artist: Optional[str] = None
+    album: Optional[str] = None
+    track_number: Optional[int] = None
+    track_total: Optional[int] = None
+    disc_number: Optional[int] = None
+    disc_total: Optional[int] = None
+    year: Optional[int] = None
+    genre: Optional[str] = None
+    label: Optional[str] = None
+    musicbrainz_release_id: Optional[str] = None
+    musicbrainz_recording_id: Optional[str] = None
+
+
+class BulkManualTagEditRequest(BaseModel):
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    year: Optional[int] = None
+    genre: Optional[str] = None
+    label: Optional[str] = None

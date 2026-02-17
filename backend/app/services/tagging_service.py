@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Optional
 
@@ -9,6 +10,7 @@ from app.core.musicbrainz_client import MBRelease, get_release_details
 from app.core.fingerprint import fingerprint_album, aggregate_release_candidates
 from app.core.tagger import write_tags, TagData
 from app.core.artwork_fetcher import fetch_artwork, save_artwork_to_folder
+from app.core.tag_backup import create_backup
 from app.models import Album, Track, MatchCandidate, ActivityLog
 from app.database import SessionLocal
 from app.config import settings
@@ -164,7 +166,11 @@ def process_album(album_id: int, release_id: Optional[str] = None, user_initiate
         if release_id:
             _mark_selected_candidate(db, album_id, release_id)
 
-        # Step 5: Write tags to files
+        # Step 5: Backup current tags before writing
+        _progress(album_id, 0.35, "Backing up current tags...")
+        create_backup(db, album.id, "musicbrainz_tag")
+
+        # Step 5b: Write tags to files
         _progress(album_id, 0.4, "Writing tags to files...")
         success = _write_album_tags(db, album, selected_release, album_id)
         if not success:
@@ -174,9 +180,20 @@ def process_album(album_id: int, release_id: Optional[str] = None, user_initiate
             notifications.send_album_update(album_id, "failed", error="Failed to write tags")
             return False
 
-        # Step 6: Fetch and save artwork
+        # Step 6: Backup before artwork, then fetch and save
         _progress(album_id, 0.75, "Fetching artwork...")
+        create_backup(db, album.id, "artwork")
         _fetch_and_save_artwork(db, album, selected_release)
+
+        # Step 7: Auto-fetch lyrics if enabled
+        if settings.lyrics_enabled and settings.lyrics_auto_fetch:
+            _progress(album_id, 0.88, "Fetching lyrics...")
+            _fetch_lyrics_for_album(db, album)
+
+        # Step 8: Auto-calculate ReplayGain if enabled
+        if settings.replaygain_enabled and settings.replaygain_auto_calculate:
+            _progress(album_id, 0.92, "Calculating ReplayGain...")
+            _calculate_replaygain_for_album(db, album)
 
         _progress(album_id, 0.95, "Finalizing...")
 
@@ -365,3 +382,67 @@ def _fetch_and_save_artwork(db: Session, album: Album, release: MBRelease):
             embedded += 1
 
     log.info(f"Artwork embedded in {embedded}/{len(tracks)} tracks")
+
+
+def _fetch_lyrics_for_album(db: Session, album: Album):
+    """Auto-fetch lyrics for all tracks during tagging pipeline."""
+    try:
+        from app.core.lyrics_client import fetch_lyrics
+        from app.core.lyrics_tagger import write_lyrics
+
+        tracks = db.query(Track).filter(Track.album_id == album.id).all()
+        found = 0
+        for track in tracks:
+            if not os.path.isfile(track.path):
+                continue
+            duration = track.duration or 0
+            lr = fetch_lyrics(
+                artist=track.artist or album.artist or "",
+                title=track.title or "",
+                album=album.album or "",
+                duration=int(duration),
+            )
+            if lr and (lr.plain_lyrics or lr.synced_lyrics):
+                if write_lyrics(track.path, lr.plain_lyrics, lr.synced_lyrics):
+                    track.has_lyrics = True
+                    track.lyrics_synced = bool(lr.synced_lyrics)
+                    found += 1
+        db.flush()
+        log.info(f"Auto-lyrics: found {found}/{len(tracks)} for album {album.id}")
+    except Exception as e:
+        log.error(f"Auto-lyrics failed for album {album.id}: {e}")
+
+
+def _calculate_replaygain_for_album(db: Session, album: Album):
+    """Auto-calculate ReplayGain for all tracks during tagging pipeline."""
+    try:
+        from app.core.replaygain import analyze_album
+        from app.core.replaygain_tagger import write_replaygain
+
+        tracks = db.query(Track).filter(Track.album_id == album.id).all()
+        filepaths = [t.path for t in tracks if os.path.isfile(t.path)]
+        if not filepaths:
+            return
+
+        rg = analyze_album(filepaths)
+        if not rg:
+            log.warning(f"ReplayGain analysis returned no data for album {album.id}")
+            return
+
+        path_to_track = {t.path: t for t in tracks}
+        for filepath in filepaths:
+            track_rg = rg.tracks.get(filepath)
+            if not track_rg:
+                continue
+            if write_replaygain(filepath, track_rg.gain, track_rg.peak, rg.album_gain, rg.album_peak):
+                track = path_to_track.get(filepath)
+                if track:
+                    track.replaygain_track_gain = track_rg.gain
+                    track.replaygain_track_peak = track_rg.peak
+
+        album.replaygain_album_gain = rg.album_gain
+        album.replaygain_album_peak = rg.album_peak
+        db.flush()
+        log.info(f"Auto-ReplayGain: album gain={rg.album_gain} for album {album.id}")
+    except Exception as e:
+        log.error(f"Auto-ReplayGain failed for album {album.id}: {e}")
