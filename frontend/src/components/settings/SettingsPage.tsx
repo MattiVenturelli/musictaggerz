@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef, type KeyboardEvent } from 'react'
 import {
   Save, Sliders, Globe, Image, Key, X, Plus, GripVertical,
-  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info, Github, Puzzle,
+  CheckCircle2, AlertCircle, RotateCcw, FolderOpen, Info, Github, Puzzle, RefreshCw,
 } from 'lucide-react'
 import { useSettingsStore } from '@/store/useSettingsStore'
 import { useNotificationStore } from '@/store/useNotificationStore'
+import { batchRetagAll } from '@/services/api'
 import { LoadingSpinner } from '@/components/common'
 import { cn } from '@/utils'
 
@@ -204,8 +205,23 @@ interface TabProps {
 }
 
 function GeneralTab({ draft, updateDraft }: TabProps) {
+  const addToast = useNotificationStore((s) => s.addToast)
+  const [retagging, setRetagging] = useState(false)
   const autoThreshold = parseFloat(draft['confidence_auto_threshold'] || '85')
   const reviewThreshold = parseFloat(draft['confidence_review_threshold'] || '50')
+
+  const handleRetagAll = async () => {
+    if (!window.confirm('This will re-match and re-tag ALL albums in your library. Are you sure?')) return
+    setRetagging(true)
+    try {
+      await batchRetagAll()
+      addToast('success', 'All albums queued for re-tagging')
+    } catch {
+      addToast('error', 'Failed to queue albums for re-tagging')
+    } finally {
+      setRetagging(false)
+    }
+  }
 
   return (
     <>
@@ -324,6 +340,29 @@ function GeneralTab({ draft, updateDraft }: TabProps) {
           value={draft['disc_subfolder_patterns'] || DEFAULTS.disc_subfolder_patterns}
           onChange={(v) => updateDraft('disc_subfolder_patterns', v)}
         />
+      </SettingsCard>
+
+      <SettingsCard title="Maintenance" description="Actions that affect your entire library.">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-text">Re-tag All Albums</p>
+            <p className="text-xs text-text-subtle mt-0.5">
+              Reset all albums and re-queue them for matching and tagging
+            </p>
+          </div>
+          <button
+            onClick={handleRetagAll}
+            disabled={retagging}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+              'bg-accent-red/15 text-accent-red hover:bg-accent-red/25',
+              retagging && 'opacity-50 cursor-not-allowed',
+            )}
+          >
+            {retagging ? <LoadingSpinner size="sm" /> : <RefreshCw className="h-4 w-4" />}
+            {retagging ? 'Queuing...' : 'Re-tag All'}
+          </button>
+        </div>
       </SettingsCard>
     </>
   )

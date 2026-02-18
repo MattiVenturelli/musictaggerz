@@ -381,6 +381,26 @@ def batch_tag_pending(db: Session = Depends(get_db)):
     return {"message": f"Queued {len(queued)} albums for tagging", "album_ids": queued}
 
 
+@router.post("/batch/retag-all")
+def batch_retag_all(db: Session = Depends(get_db)):
+    """Reset ALL albums and re-queue them for matching + tagging."""
+    albums = db.query(Album).all()
+    queued = []
+    for album in albums:
+        db.query(MatchCandidate).filter(MatchCandidate.album_id == album.id).delete()
+        album.status = "matching"
+        album.match_confidence = None
+        album.musicbrainz_release_id = None
+        album.musicbrainz_release_group_id = None
+        album.error_message = None
+        album.retry_count = 0
+        db.add(ActivityLog(album_id=album.id, action="retag_requested", details="batch retag all"))
+        queue_manager.enqueue_album(album.id, user_initiated=True)
+        queued.append(album.id)
+    db.commit()
+    return {"message": f"Queued {len(queued)} albums for re-tagging", "album_ids": queued}
+
+
 @router.post("/batch/skip")
 def batch_skip(request: BatchActionRequest, db: Session = Depends(get_db)):
     """Skip multiple albums."""

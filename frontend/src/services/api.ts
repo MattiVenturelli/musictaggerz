@@ -60,6 +60,10 @@ export async function batchTagPending(): Promise<void> {
   await api.post('/albums/batch/tag-pending')
 }
 
+export async function batchRetagAll(): Promise<void> {
+  await api.post('/albums/batch/retag-all')
+}
+
 export async function triggerScan(path?: string, force?: boolean): Promise<void> {
   await api.post('/albums/scan', { path: path || null, force: force || false })
 }
