@@ -98,6 +98,17 @@ class QueueManager:
         if not album_id:
             return
 
+        # Don't re-process already tagged albums unless user explicitly triggered it
+        if not item.user_initiated:
+            db = SessionLocal()
+            try:
+                album = db.query(Album).filter(Album.id == album_id).first()
+                if album and album.status == "tagged":
+                    log.info(f"Album {album_id} already tagged, skipping auto re-process")
+                    return
+            finally:
+                db.close()
+
         log.info(f"Processing album {album_id} (attempt {item.retry_count + 1}, user_initiated={item.user_initiated})")
         success = process_album(album_id, release_id=item.release_id, user_initiated=item.user_initiated)
 

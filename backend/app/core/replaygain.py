@@ -49,19 +49,22 @@ def analyze_track(filepath: str) -> Optional[TrackLoudness]:
         )
         stderr = result.stderr
 
-        # Parse integrated loudness: "I:         -14.5 LUFS"
-        i_match = re.search(r'I:\s+([-\d.]+)\s+LUFS', stderr)
+        # Parse from the Summary section at the end of ffmpeg output.
+        # The summary looks like:
+        #   Integrated loudness:
+        #     I:          -7.7 LUFS
+        #   True peak:
+        #     Peak:        0.6 dBFS
+        summary_match = re.search(r'Summary:\s*\n(.*)', stderr, re.DOTALL)
+        summary = summary_match.group(1) if summary_match else stderr
+
+        i_match = re.search(r'I:\s+([-\d.]+)\s+LUFS', summary)
         if not i_match:
             log.warning(f"Could not parse integrated loudness from ffmpeg output for {filepath}")
             return None
         integrated = float(i_match.group(1))
 
-        # Parse true peak: "Peak:\s+(-?\d+\.?\d*)\s+dBFS" (from the Summary section)
-        # The summary section has "True peak:" followed by the value
-        peak_match = re.search(r'True peak:\s*\n\s*Peak:\s+([-\d.]+)\s+dBFS', stderr)
-        if not peak_match:
-            # Fallback: try simpler pattern
-            peak_match = re.search(r'Peak:\s+([-\d.]+)\s+dBFS', stderr)
+        peak_match = re.search(r'Peak:\s+([-\d.]+)\s+dBFS', summary)
         if not peak_match:
             log.warning(f"Could not parse true peak from ffmpeg output for {filepath}")
             return None

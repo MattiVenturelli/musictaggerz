@@ -10,7 +10,7 @@ from app.core.musicbrainz_client import MBRelease, get_release_details
 from app.core.fingerprint import fingerprint_album, aggregate_release_candidates
 from app.core.tagger import write_tags, TagData
 from app.core.artwork_fetcher import fetch_artwork, save_artwork_to_folder
-from app.core.tag_backup import create_backup
+from app.core.tag_backup import create_backup, read_full_tags
 from app.models import Album, Track, MatchCandidate, ActivityLog
 from app.database import SessionLocal
 from app.config import settings
@@ -294,20 +294,39 @@ def _write_album_tags(db: Session, album: Album, release: MBRelease, album_id: i
     mb_flat = sorted(release.tracks, key=lambda t: t.position)
 
     year = release.original_year or release.year
-    disc_total = release.disc_count if release.disc_count > 1 else None
+
+    # Detect if local album is single-disc but MB release is multi-disc
+    local_discs = set(t.disc_number or 1 for t in tracks)
+    local_is_single_disc = len(local_discs) == 1
+    mb_is_multi_disc = release.disc_count > 1
+
+    # When local is single-disc but MB is multi-disc, local track numbers
+    # can't be trusted (they may reflect a previous multi-disc tagging).
+    # Use flat sequential matching sorted by file path.
+    use_flat_only = local_is_single_disc and mb_is_multi_disc
+    if use_flat_only:
+        tracks = sorted(tracks, key=lambda t: t.path)
+
+    disc_total = release.disc_count if mb_is_multi_disc and not local_is_single_disc else None
     total = len(tracks)
 
     success_count = 0
     for i, track in enumerate(tracks):
         disc_num = track.disc_number or 1
-        trk_num = track.track_number or 0
 
-        # Try disc-aware lookup, then fall back to flat index
+        # Match local track to MB track
         mb_track = None
-        if trk_num > 0 and (disc_num, trk_num) in mb_by_disc:
-            mb_track = mb_by_disc[(disc_num, trk_num)]
-        elif i < len(mb_flat):
-            mb_track = mb_flat[i]
+        if use_flat_only:
+            # Flat sequential matching by file path order
+            if i < len(mb_flat):
+                mb_track = mb_flat[i]
+        else:
+            # Disc-aware lookup, then flat fallback
+            trk_num = track.track_number or 0
+            if trk_num > 0 and (disc_num, trk_num) in mb_by_disc:
+                mb_track = mb_by_disc[(disc_num, trk_num)]
+            elif i < len(mb_flat):
+                mb_track = mb_flat[i]
 
         if album_id and total > 0:
             pct = 0.4 + (i / total) * 0.3  # progress 0.4 -> 0.7
@@ -315,7 +334,10 @@ def _write_album_tags(db: Session, album: Album, release: MBRelease, album_id: i
             _progress(album_id, pct, f"Writing track {i+1}/{total}: {title_preview}")
 
         # Per-disc track_total
-        track_total = release.disc_track_counts.get(disc_num, release.track_count)
+        if use_flat_only:
+            track_total = release.track_count
+        else:
+            track_total = release.disc_track_counts.get(disc_num, release.track_count)
 
         tag_data = TagData(
             artist=release.artist,
@@ -326,21 +348,26 @@ def _write_album_tags(db: Session, album: Album, release: MBRelease, album_id: i
             label=release.label,
             country=release.country,
             track_total=track_total,
-            disc_number=disc_num,
+            disc_number=1 if use_flat_only else disc_num,
             disc_total=disc_total,
             musicbrainz_release_id=release.release_id,
         )
 
         if mb_track:
             tag_data.title = mb_track.title
-            tag_data.track_number = mb_track.disc_position if mb_track.disc_position > 0 else mb_track.position
             tag_data.musicbrainz_recording_id = mb_track.recording_id
+            if use_flat_only:
+                tag_data.track_number = i + 1
+            else:
+                tag_data.track_number = mb_track.disc_position if mb_track.disc_position > 0 else mb_track.position
 
         if write_tags(track.path, tag_data):
             if mb_track:
                 track.title = mb_track.title
                 track.musicbrainz_recording_id = mb_track.recording_id
             track.artist = release.artist
+            track.track_number = tag_data.track_number
+            track.disc_number = tag_data.disc_number
             track.status = "tagged"
             success_count += 1
         else:
@@ -373,13 +400,21 @@ def _fetch_and_save_artwork(db: Session, album: Album, release: MBRelease):
     if saved_path:
         album.cover_path = saved_path
 
-    # Embed in all tracks
+    # Embed in all tracks (read-merge-write to preserve existing tags)
     tracks = db.query(Track).filter(Track.album_id == album.id).all()
     embedded = 0
     for track in tracks:
-        tag_data = TagData(cover_data=image_data, cover_mime=mime)
-        if write_tags(track.path, tag_data):
-            embedded += 1
+        existing = read_full_tags(track.path)
+        if existing:
+            existing.cover_data = image_data
+            existing.cover_mime = mime
+            if write_tags(track.path, existing):
+                embedded += 1
+        else:
+            # Fallback: write cover only (will clear other tags)
+            tag_data = TagData(cover_data=image_data, cover_mime=mime)
+            if write_tags(track.path, tag_data):
+                embedded += 1
 
     log.info(f"Artwork embedded in {embedded}/{len(tracks)} tracks")
 

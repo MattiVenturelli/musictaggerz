@@ -164,13 +164,21 @@ def apply_artwork(album_id: int, request: ApplyArtworkRequest, db: Session = Dep
     if saved_path:
         album.cover_path = saved_path
 
-    # Embed in all audio files
+    # Embed in all audio files (read-merge-write to preserve existing tags)
+    create_backup(db, album_id, "artwork")
     tracks = db.query(Track).filter(Track.album_id == album_id).all()
     embedded = 0
     for track in tracks:
-        tag_data = TagData(cover_data=image_data, cover_mime=mime)
-        if write_tags(track.path, tag_data):
-            embedded += 1
+        existing = read_full_tags(track.path)
+        if existing:
+            existing.cover_data = image_data
+            existing.cover_mime = mime
+            if write_tags(track.path, existing):
+                embedded += 1
+        else:
+            tag_data = TagData(cover_data=image_data, cover_mime=mime)
+            if write_tags(track.path, tag_data):
+                embedded += 1
 
     db.add(ActivityLog(
         album_id=album_id, action="artwork_applied",
