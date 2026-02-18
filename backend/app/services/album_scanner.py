@@ -113,7 +113,9 @@ def _scan_album_folder(db: Session, folder_path: str, force: bool = False) -> in
     existing = db.query(Album).filter(Album.path == folder_path).first()
     if existing:
         if not force:
-            log.debug(f"Album already in database: {folder_path}")
+            changed = _incremental_update(db, existing)
+            if changed:
+                log.info(f"Incremental update found changes: {folder_path}")
             return existing.id
         # Force rescan: delete old data and re-import
         log.info(f"Force rescan: {folder_path}")
@@ -171,7 +173,9 @@ def _scan_multi_disc_folder(db: Session, parent_path: str, disc_subs: dict[int, 
     existing = db.query(Album).filter(Album.path == parent_path).first()
     if existing:
         if not force:
-            log.debug(f"Multi-disc album already in database: {parent_path}")
+            changed = _incremental_update(db, existing)
+            if changed:
+                log.info(f"Incremental update found changes (multi-disc): {parent_path}")
             return existing.id
         log.info(f"Force rescan multi-disc: {parent_path}")
         db.query(Track).filter(Track.album_id == existing.id).delete()
@@ -229,6 +233,73 @@ def _scan_multi_disc_folder(db: Session, parent_path: str, disc_subs: dict[int, 
 
     db.commit()
     return album.id
+
+
+def _incremental_update(db: Session, album: Album) -> bool:
+    """Compare disk files vs DB tracks for an existing album.
+
+    Adds new tracks, removes deleted tracks, and resets album to pending
+    if any changes are found. Returns True if changes were made.
+    """
+    disc_subs = find_disc_subfolders(album.path)
+    if disc_subs:
+        album_info = scan_multi_disc_album(album.path, disc_subs)
+    else:
+        album_info = scan_album_folder(album.path)
+
+    if not album_info:
+        return False
+
+    disk_paths = {t.path for t in album_info.tracks}
+    db_tracks = db.query(Track).filter(Track.album_id == album.id).all()
+    db_paths = {t.path for t in db_tracks}
+
+    added = disk_paths - db_paths
+    removed = db_paths - disk_paths
+
+    if not added and not removed:
+        return False
+
+    # Build a lookup for quick access to scanned track info
+    track_info_map = {t.path: t for t in album_info.tracks}
+
+    for path in added:
+        ti = track_info_map[path]
+        track = Track(
+            album_id=album.id,
+            path=ti.path,
+            track_number=ti.track_number,
+            disc_number=ti.disc_number or 1,
+            title=ti.title,
+            artist=ti.artist,
+            duration=ti.duration,
+            musicbrainz_recording_id=ti.musicbrainz_recording_id,
+            status="pending",
+        )
+        db.add(track)
+
+    if removed:
+        db.query(Track).filter(Track.path.in_(removed)).delete(synchronize_session=False)
+
+    album.track_count = len(disk_paths)
+    album.status = "pending"
+
+    changes = []
+    if added:
+        changes.append(f"+{len(added)} tracks")
+    if removed:
+        changes.append(f"-{len(removed)} tracks")
+    detail = ", ".join(changes)
+
+    db.add(ActivityLog(
+        album_id=album.id,
+        action="incremental_update",
+        details=detail,
+    ))
+
+    db.commit()
+    log.info(f"Incremental update for '{album.artist} - {album.album}': {detail}")
+    return True
 
 
 def scan_single_folder(folder_path: str) -> int | None:

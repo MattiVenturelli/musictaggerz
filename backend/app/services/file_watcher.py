@@ -21,16 +21,22 @@ class _PollingScanner:
         self._watch_path = watch_path
         self._callback = callback
         self._known_folders: set[str] = set()
+        self._folder_file_counts: dict[str, int] = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
     def start(self):
         try:
             self._known_folders = self._load_known_folders()
+            self._folder_file_counts = {
+                folder: self._count_audio_files(folder)
+                for folder in self._known_folders
+            }
             log.info(f"Polling scanner: {len(self._known_folders)} known folders in DB")
         except Exception as e:
             log.error(f"Failed to load known folders: {e}")
             self._known_folders = set()
+            self._folder_file_counts = {}
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -71,9 +77,38 @@ class _PollingScanner:
             if os.path.isfile(os.path.join(path, f))
         )
 
+    def _count_audio_files(self, folder: str) -> int:
+        """Count audio files in a folder, including disc subfolders."""
+        count = 0
+        try:
+            disc_subs = find_disc_subfolders(folder)
+            dirs_to_check = [folder]
+            if disc_subs:
+                dirs_to_check.extend(disc_subs.values())
+            for d in dirs_to_check:
+                if not os.path.isdir(d):
+                    continue
+                for f in os.listdir(d):
+                    if os.path.isfile(os.path.join(d, f)) and os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS:
+                        count += 1
+        except OSError:
+            pass
+        return count
+
     def _scan_for_new(self):
         if not os.path.isdir(self._watch_path):
             return
+
+        # Check known folders for file count changes (added/removed tracks)
+        for folder in list(self._known_folders):
+            if not os.path.isdir(folder):
+                continue
+            current_count = self._count_audio_files(folder)
+            prev_count = self._folder_file_counts.get(folder, 0)
+            if current_count != prev_count:
+                log.info(f"Audio file count changed in {folder}: {prev_count} -> {current_count}")
+                self._folder_file_counts[folder] = current_count
+                self._callback(folder)
 
         for entry in os.listdir(self._watch_path):
             if entry.startswith("."):
@@ -103,6 +138,7 @@ class _PollingScanner:
                             if disc_subs:
                                 log.info(f"New multi-disc album detected: {parent_path}")
                                 self._known_folders.add(parent_path)
+                                self._folder_file_counts[parent_path] = self._count_audio_files(parent_path)
                                 # Mark all disc subfolders as known
                                 for disc_path in disc_subs.values():
                                     self._known_folders.add(disc_path)
@@ -110,6 +146,7 @@ class _PollingScanner:
                                 continue
                     log.info(f"New album folder detected: {root}")
                     self._known_folders.add(root)
+                    self._folder_file_counts[root] = self._count_audio_files(root)
                     self._callback(root)
 
 
