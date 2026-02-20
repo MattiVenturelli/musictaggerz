@@ -326,6 +326,7 @@ def create_backup(db: Session, album_id: int, action: str, track_ids: list[int] 
     db.flush()  # get backup.id
 
     backup_dir = os.path.join(BACKUP_DIR, str(backup.id))
+    album_cover_file = None
 
     for track in tracks:
         if not os.path.isfile(track.path):
@@ -335,19 +336,18 @@ def create_backup(db: Session, album_id: int, action: str, track_ids: list[int] 
         if not tag_data:
             continue
 
-        # Save cover to disk if present
-        cover_file = None
+        # Save one cover per backup (all tracks in an album share the same cover)
         has_cover = tag_data.cover_data is not None
-        if has_cover and tag_data.cover_data:
+        if has_cover and tag_data.cover_data and album_cover_file is None:
             os.makedirs(backup_dir, exist_ok=True)
             ext = ".png" if tag_data.cover_mime == "image/png" else ".jpg"
-            cover_file = os.path.join(backup_dir, f"{track.id}{ext}")
+            album_cover_file = os.path.join(backup_dir, f"cover{ext}")
             try:
-                with open(cover_file, "wb") as f:
+                with open(album_cover_file, "wb") as f:
                     f.write(tag_data.cover_data)
             except Exception as e:
-                log.warning(f"Failed to save backup cover for track {track.id}: {e}")
-                cover_file = None
+                log.warning(f"Failed to save backup cover for album {album_id}: {e}")
+                album_cover_file = None
 
         snapshot = TrackTagSnapshot(
             backup_id=backup.id,
@@ -355,7 +355,7 @@ def create_backup(db: Session, album_id: int, action: str, track_ids: list[int] 
             path=track.path,
             tags_json=json.dumps(_tag_data_to_dict(tag_data)),
             has_cover=has_cover,
-            cover_path=cover_file,
+            cover_path=album_cover_file if has_cover else None,
         )
         db.add(snapshot)
 
